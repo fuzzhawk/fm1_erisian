@@ -104,3 +104,14 @@ background pre-erase:
 - SAVE while playing → "SAVE PENDING", written on STOP: OK.
 Next: try 32-byte writes started right after an audio block (~0.2 ms each,
 inside the ~2.9 ms block slack).
+
+### 2026-11-17 — 32-byte writes after each audio block (CI run 31, sha256 f87de3bb…)
+Verified on Charles's unit (0x856014), twice with similar numbers:
+- LAST SAVE 1090 ms, 96 writes, 0 erases, longest operation 2 ms.
+- Audio missed 96 blocks, overruns 0: **every flash write costs at least
+  one whole audio block, however small**, even when started right after a
+  block. A single 3.4 KB write cost 8 blocks.
+- Conclusion: no inaudible flash writes while playing with this runtime.
+  Policy: SAVE while playing is written on STOP; GLO + SAVE = immediate
+  one-shot save (~8 blocks dropped). Uploads and any other flash writes
+  should also avoid playback.

@@ -233,9 +233,11 @@ in keys mode.
   on the FM-1 (hardware 2026-11-17: skipped blocks = buzz, and the sequencer
   hiccups because it runs on rendered audio; 256-byte chunks made it
   choppier). So: SAVE while playing snapshots and writes on STOP ("SAVE
-  PENDING"); GLO + SAVE forces an immediate save and reports its cost on
-  the status page. Free sectors are pre-erased while stopped
-  (`store_prepare`) so a save never erases.
+  PENDING"); GLO + SAVE forces an immediate one-shot save (~8 blocks / 23 ms
+  dropout) and reports its cost on the status page. Measured: every flash
+  write drops at least one whole audio block, however small, so seamless
+  saving during playback is not possible with this runtime. Free sectors are
+  pre-erased while stopped (`store_prepare`) so a save never erases.
 - Flash JEDEC ID must be `0x856014` or `0xB36014`; otherwise saves are refused
   with a message.
 

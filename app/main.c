@@ -213,89 +213,15 @@ static int save_flush(void)
     return r;
 }
 
-/* Experiment (GLO + SAVE while playing): a single 3.4 KB write stopped
- * audio for 21 ms (8 blocks). Here the save is written 32 bytes at a time
- * (~0.2 ms each), every write started right after the audio interrupt has
- * rendered a block, so it should fit in the ~2.9 ms before the next one. */
-#define MICRO_CHUNK 32u
-#define MICRO_PER_TICK 3u
-static int micro_active;
-static uint32_t micro_at, micro_t0;
-static struct fm1_audio_stats micro_a0;
-static struct flash_stats micro_f0;
-
-static void micro_finish(int r)
-{
-    struct fm1_audio_stats a1;
-    fm1_audio_stats_read(&a1);
-    uint32_t ms = fm1_millis() - micro_t0;
-    uint32_t expected = (ms * 441u + 639u) / 1280u;
-    uint32_t got = a1.blocks - micro_a0.blocks;
-    micro_active = 0;
-    last_save.ms = ms;
-    last_save.writes = fstats.writes - micro_f0.writes;
-    last_save.erases = fstats.erases - micro_f0.erases;
-    last_save.max_ms = fstats.max_ms;
-    last_save.missed_blocks = expected > got ? expected - got : 0;
-    last_save.overruns = a1.overruns - micro_a0.overruns;
-    last_save.playing = audio_playing();
-    last_save.result = r;
-    last_save.valid = 1;
-    char t[32], *p = fmt_str(t, r == STORE_OK ? "MICRO SAVED -" : "SAVE FAILED -");
-    p = fmt_uint(p, last_save.missed_blocks);
-    fmt_str(p, "BLK");
-    drum_ui_say(t);
-}
-
-/* Wait (at most ~4 ms) for the audio interrupt to finish its next block. */
-static int after_audio_block(void)
-{
-    struct fm1_audio_stats a;
-    fm1_audio_stats_read(&a);
-    const uint32_t first = a.blocks, t0 = fm1_millis();
-    do {
-        fm1_audio_stats_read(&a);
-        if (a.blocks != first) return 1;
-    } while (fm1_millis() - t0 < 4u);
-    return 0;
-}
-
-static void micro_poll(void)
-{
-    if (!micro_active) return;
-    for (unsigned k = 0; k < MICRO_PER_TICK; k++) {
-        uint32_t left = sizeof save_buf - micro_at;
-        if (!left) {
-            after_audio_block();
-            micro_finish(store_commit(&store, store_crc32(&save_buf, sizeof save_buf, 0)));
-            return;
-        }
-        if (!after_audio_block()) return;   /* audio not running: try next tick */
-        uint32_t n = left < MICRO_CHUNK ? left : MICRO_CHUNK;
-        int r = store_append(&store, (const uint8_t *)&save_buf + micro_at, n);
-        if (r) { micro_finish(r); return; }
-        micro_at += n;
-    }
-}
-
 int project_save(int now)
 {
     if (rescue || store_state != 0) return STORE_READ_ONLY;
-    if (store.stream.active || micro_active) return STORE_INVALID;   /* busy */
+    if (store.stream.active) return STORE_INVALID;   /* an upload is running */
     snapshot();
-    if (now && audio_playing()) {           /* GLO + SAVE: the experiment */
-        int r = store_begin(&store, PROJECT_KEY, sizeof save_buf);
-        if (r) return r;
-        fstats.max_ms = 0;
-        micro_f0 = fstats;
-        fm1_audio_stats_read(&micro_a0);
-        micro_t0 = fm1_millis();
-        micro_at = 0;
-        micro_active = 1;
-        drum_ui_say("MICRO SAVING...");
-        return STORE_OK;
-    }
-    if (!audio_playing())
+    /* Measured on hardware: every flash write drops at least one whole
+     * audio block (one 3.4 KB write: 8 blocks; 96 small writes: 96). So a
+     * save while playing waits for STOP, unless forced with GLO + SAVE. */
+    if (now || !audio_playing())
         return save_flush();
     save_pending = 1;
     drum_ui_say("SAVE PENDING: STOP TO WRITE");
@@ -478,14 +404,13 @@ void groove_screen_control(void)
     handle_upload();
     if (now - last_poll < 10u) return;
     last_poll = now;
-    micro_poll();
     if (save_pending && !audio_playing())
         save_flush();   /* deferred save: the beat just stopped */
 
     /* Erase free flash in the background, only while the beat is stopped
      * (an erase pauses audio), so saves during playback never erase. */
     static uint32_t last_prepare;
-    if (booted && !rescue && store_state == 0 && !save_pending && !micro_active && !store.stream.active &&
+    if (booted && !rescue && store_state == 0 && !save_pending && !store.stream.active &&
         !audio_playing() && now - last_prepare >= 50u) {
         last_prepare = now;
         store_prepare(&store);
