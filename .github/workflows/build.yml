@@ -71,3 +71,61 @@ jobs:
           python-version: "3.12"
       - name: Build and run host tests
         run: sh tests/run_tests.sh
+
+  # Boot the new package in the FM-1 emulator (joakimeriksson/fm1-emu, MIT)
+  # before anyone flashes it. Report-only for now: read the log and snapshots.
+  emulator:
+    needs: firmware
+    runs-on: ubuntu-latest
+    env:
+      FM1_EMU_REPO: https://github.com/joakimeriksson/fm1-emu
+      FM1_EMU_REV: 2ed986561c6f26596d37fd306fac0e7558a41356
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: erisian-${{ github.sha }}
+          path: pkg
+
+      - name: Cache emulator build
+        id: emu-cache
+        uses: actions/cache@v4
+        with:
+          path: emu/target/release/fm1-emu
+          key: fm1-emu-${{ env.FM1_EMU_REV }}
+
+      - name: Build emulator
+        if: steps.emu-cache.outputs.cache-hit != 'true'
+        run: |
+          git init -q emu && cd emu
+          git fetch -q --depth 1 "$FM1_EMU_REPO" "$FM1_EMU_REV"
+          git checkout -q FETCH_HEAD
+          cargo build --release --locked -p fm1-emu
+
+      - name: Boot package
+        run: |
+          mkdir -p run/work && cd run
+          EMU=../emu/target/release/fm1-emu
+          "$EMU" --version || true
+          echo "== package directory"
+          FM1_FWSC_DIR=1 "$EMU" --fwsc ../pkg/build/fm1.fwsc --ms 50 --quiet 2>&1 | head -n 60 || true
+          echo "== 3 s boot"
+          set +e
+          "$EMU" --fwsc ../pkg/build/fm1.fwsc --ms 3000 --snap 500,1500,2900 \
+            --wav work/out.wav > work/boot.log 2>&1
+          echo "exit code: $?" | tee -a work/boot.log
+          set -e
+          tail -n 120 work/boot.log
+          ls -la work
+
+      - name: First instructions
+        run: |
+          cd run
+          ../emu/target/release/fm1-emu --fwsc ../pkg/build/fm1.fwsc --trace 400 --steps 400 \
+            > work/trace.log 2>&1 || true
+          tail -n 80 work/trace.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emulator-${{ github.sha }}
+          path: run/work/
