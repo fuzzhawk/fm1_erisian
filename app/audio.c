@@ -63,8 +63,10 @@ FM1_AUDIO_CODE int fm1_app_render(int32_t *out, unsigned frames)
 {
     if (!out || frames != FM1_BLOCK_FRAMES)
         return -1;
+    /* Volatile: a plain loop would be compiled into memset, which is in flash. */
+    volatile int32_t *clear = out;
     for (unsigned i = 0; i < 2 * frames; i++)
-        out[i] = 0;
+        clear[i] = 0;
 
     if (stop_requests != stop_seen) { stop_seen = stop_requests; seq_stop(&seq); }
     if (play_requests != play_seen) {
@@ -72,10 +74,9 @@ FM1_AUDIO_CODE int fm1_app_render(int32_t *out, unsigned frames)
         /* seq_start without memset: clear by hand. */
         seq.pulse = 0;
         seq.phase = 44100u * 60u * 100u; /* first pulse due at once */
-        for (unsigned v = 0; v < SEQ_VOICES; v++) {
-            seq.vpulse[v] = seq.vindex[v] = 0;
-            seq.pending_left[v] = 0;
-        }
+        volatile uint8_t *vp = seq.vpulse, *vi = seq.vindex, *pl = seq.pending_left;
+        for (unsigned v = 0; v < SEQ_VOICES; v++)
+            vp[v] = vi[v] = pl[v] = 0;
         if (!seq.random) seq.random = 0x23F00DD5u;
         seq.playing = 1;
     }

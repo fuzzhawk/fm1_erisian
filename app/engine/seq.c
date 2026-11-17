@@ -52,10 +52,14 @@ void seq_start(struct seq_state *s, uint32_t seed)
     s->playing = 1;
 }
 
-void seq_stop(struct seq_state *s)
+/* Called from the audio interrupt: no memset (libc is in flash), and the
+ * volatile pointer stops the compiler turning the loop back into one. */
+FM1_AUDIO_CODE void seq_stop(struct seq_state *s)
 {
+    volatile uint8_t *left = s->pending_left;
     s->playing = 0;
-    memset(s->pending_left, 0, sizeof s->pending_left);
+    for (unsigned v = 0; v < SEQ_VOICES; v++)
+        left[v] = 0;
 }
 
 FM1_AUDIO_CODE static uint32_t next_random(struct seq_state *s)
@@ -160,8 +164,11 @@ FM1_AUDIO_CODE unsigned seq_render(struct seq_state *s, const struct seq_pattern
             if (++s->pulse >= master) {
                 /* Pattern end: every voice restarts from its first step. */
                 s->pulse = 0;
-                for (unsigned v = 0; v < SEQ_VOICES; v++)   /* no memset: libc is in flash */
-                    s->vpulse[v] = s->vindex[v] = 0;
+                /* No memset (libc is in flash); volatile keeps the compiler
+                 * from turning this loop into a memset call. */
+                volatile uint8_t *vp = s->vpulse, *vi = s->vindex;
+                for (unsigned v = 0; v < SEQ_VOICES; v++)
+                    vp[v] = vi[v] = 0;
             }
         }
         s->phase += step;
