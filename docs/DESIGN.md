@@ -161,7 +161,7 @@ each button does in the current mode.
 | SEL | + white key = pattern | Layer 1/2/3 | Chain / layer stack-split setup |
 | ENV | Live pads on/off | Envelope page | Mute mode |
 | LFO | ERIS randomize | LFO page | Undo |
-| EDIT | Next parameter page | same | Previous page |
+| EDIT | Next edit mode (SEQ → ENGINE → SHAPE → TIMING) | same | Previous mode |
 | GLO | Tap tempo / hold + encoder = BPM | same | Swing, global settings, MIDI |
 | HOME | Home / hold = SHIFT | same | — |
 | SAVE | Preset library | same | — |
@@ -180,12 +180,18 @@ Chords:
 - **OCT− held at power-on → rescue mode**, checked before anything else.
 
 Encoders (revised 2026-11-17 after hardware use): KNOB1–KNOB4 (the row above
-the buttons) edit the 4 parameters of the current page, drawn in the same
-order on screen. ALGORITHM scrolls pages (EDIT steps), SELECT picks the voice,
-PRESETS sets the tempo (later: preset browsing). Pages: ENGINE 1–4 (labelled
-per engine, empty ones skipped), FILTER, AMP, LO-FI, TEXTURE, TIMING. Choice
-parameters (filter type, transient, texture, exciter, material, mode, FM
-ratio) move one choice per detent. Holding a step: KNOB1 velocity, KNOB2
+the buttons) edit the 4 parameters on screen, drawn left to right in the same
+order. EDIT cycles the edit mode, ALGORITHM turns the pages of that mode,
+SELECT picks the voice, PRESETS sets the tempo (later: preset browsing).
+Modes and pages:
+- **SEQ** — the grid, with a quick strip (TUNE, DECAY, CUTOFF, LEVEL).
+  ALGORITHM here moves the pattern page (like OCT−/OCT+).
+- **ENGINE** — ENGINE 1–4, titled with the voice's engine, empty pages skipped.
+- **SHAPE** — FILTER, AMP, LO-FI, TEXTURE (+ choke, mute).
+- **TIMING** — voice length, speed, swing, pattern length.
+
+Choice parameters (filter type, transient, texture, exciter, material, mode,
+FM ratio) move one choice per detent. Holding a step: KNOB1 velocity, KNOB2
 probability, KNOB3 ratchet, KNOB4 on/off.
 
 ---
@@ -204,7 +210,10 @@ in keys mode.
 - **Drum:** all-voices grid (11 rows × 16 steps of the current page),
   selected voice highlighted, steps past the length dimmed, each voice row
   shows its own playhead. Header: page indicator, BPM, kit, transport.
-  Footer: 7-parameter strip.
+  Footer: quick 4-parameter strip.
+- **Drum edit modes (ENGINE, SHAPE, TIMING):** the grid is hidden; the page
+  fills the screen as four columns, one per knob (name, value bar, value),
+  under a title (voice + engine or page name, page n/m) and the mode tabs.
 - **Keys:** layer stack (engine, zone/stack, level, MIDI channel), keyboard
   zone map, looper status, 7-parameter strip.
 - **FX:** signal-flow strip with the current bus marked, bus meters,

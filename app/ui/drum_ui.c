@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: MIT */
-/* Drum mode: the all-voices grid, voice select on black keys (or SELECT),
- * steps on white keys, four parameters per page on KNOB1..KNOB4 (ALGORITHM
- * scrolls pages, PRESETS sets the tempo). Control task only. */
+/* Drum mode. Voice select on black keys (or SELECT), steps on white keys.
+ * EDIT cycles the view: SEQ (the all-voices grid with a quick strip), then
+ * the full-screen edit modes ENGINE, SHAPE and TIMING. ALGORITHM turns the
+ * pages of the current mode (in SEQ: the pattern page), KNOB1..KNOB4 edit the
+ * four parameters on screen, PRESETS sets the tempo. Control task only. */
 #include <string.h>
 
 #include "../erisian.h"
@@ -26,6 +28,16 @@ static const char *const voice_labels[11] = {
 #define CELL_W 13u
 #define CELL_H 12u
 #define STRIP_Y 166u
+/* Full-screen edit view: four columns, one per knob. */
+#define COL_W 60u
+#define TITLE_Y 26u
+#define TABS_Y 46u
+#define NAME_Y 60u
+#define BAR_Y 82u
+#define BAR_H 110u
+#define BAR_W 30u
+#define VALUE_Y 200u
+#define HINT_Y 228u
 
 #define C_OFF       RGB565(38, 38, 38)
 #define C_OUTSIDE   RGB565(14, 14, 14)
@@ -33,9 +45,11 @@ static const char *const voice_labels[11] = {
 #define C_ON_SOFT   RGB565(150, 112, 0)
 #define C_HEAD_OFF  RGB565(120, 120, 120)
 #define C_HEAD_ON   RGB565(255, 255, 255)
+#define C_BAR_OFF   RGB565(30, 30, 30)
 
 static unsigned voice;          /* selected voice */
 static unsigned page;           /* 0..3: steps page*16 .. +15 */
+static unsigned mode;           /* see modes[] */
 static unsigned param_page;     /* see page_names */
 static int pads;                /* ENV: black keys also play */
 static int held_step = -1;      /* step key held: encoders edit the step */
@@ -46,13 +60,15 @@ static uint32_t message_until;
 /* --- parameter pages ------------------------------------------------------ */
 
 /* Pages of four parameters on KNOB1..KNOB4, drawn left to right like the
- * knobs above the buttons. ALGORITHM scrolls pages (EDIT steps), SELECT picks
- * the voice, PRESETS sets the tempo. Engine pages are labelled by the
- * selected voice's engine and skipped when that engine has nothing there. */
+ * knobs above the buttons. Pages are grouped into modes: EDIT moves to the
+ * next mode, ALGORITHM to the next page inside it. Engine pages are labelled
+ * by the selected voice's engine and skipped when that engine has nothing
+ * there. */
 enum { PK_NONE, PK_E, PK_C, PK_ENGINE, PK_CHOKE, PK_LENGTH, PK_SPEED, PK_SWING,
        PK_MUTE, PK_MASTER_LEN };
 struct slot { uint8_t kind, param; const char *name; };
-#define PAGES 9u
+#define PAGES 10u
+#define PAGE_QUICK 9u
 static const struct slot pages[PAGES][4] = {
     { { PK_ENGINE, 0, "ENGIN" }, { PK_E, 0, 0 }, { PK_E, 1, 0 }, { PK_E, 2, 0 } },
     { { PK_E, 3, 0 }, { PK_E, 4, 0 }, { PK_E, 5, 0 }, { PK_E, 6, 0 } },
@@ -63,9 +79,17 @@ static const struct slot pages[PAGES][4] = {
     { { PK_C, DC_BITS, 0 }, { PK_C, DC_RATE, 0 }, { PK_C, DC_TRANS, 0 }, { PK_C, DC_TLEVEL, 0 } },
     { { PK_C, DC_TEXTURE, 0 }, { PK_C, DC_XLEVEL, 0 }, { PK_CHOKE, 0, "CHOKE" }, { PK_MUTE, 0, "MUTE" } },
     { { PK_LENGTH, 0, "LEN" }, { PK_SPEED, 0, "SPEED" }, { PK_SWING, 0, "SWING" }, { PK_MASTER_LEN, 0, "P.LEN" } },
+    { { PK_E, E_TUNE, 0 }, { PK_E, E_DECAY, 0 }, { PK_C, DC_CUTOFF, 0 }, { PK_C, DC_LEVEL, 0 } },
 };
 static const char *const page_names[PAGES] = {
     "ENGINE", "ENGINE 2", "ENGINE 3", "ENGINE 4", "FILTER", "AMP", "LO-FI", "TEXTURE", "TIMING",
+    "QUICK",
+};
+
+/* EDIT cycles these. SEQ shows the grid; the others take the whole screen. */
+enum { MODE_SEQ, MODE_ENGINE, MODE_SHAPE, MODE_TIMING, MODES };
+static const struct { const char *name; uint8_t first, count; } modes[MODES] = {
+    { "SEQ", PAGE_QUICK, 1 }, { "ENGINE", 0, 4 }, { "SHAPE", 4, 4 }, { "TIMING", 8, 1 },
 };
 static const char *const speed_names[SEQ_SPEED_COUNT] = { "2X", "1X", "3/4", "1/2", "1/4" };
 static const char *const ftype_names[4] = { "OFF", "LP", "HP", "BP" };
@@ -91,20 +115,35 @@ static int page_visible(unsigned pg)
     return 0;
 }
 
-/* Step to the next/previous page that has something for this voice. */
+/* Step to the next/previous page of this mode that has something for the
+ * voice (wrapping). */
 static void page_step(int dir)
 {
-    for (unsigned tries = 0; tries < PAGES; tries++) {
-        param_page = (param_page + PAGES + (dir > 0 ? 1u : PAGES - 1u)) % PAGES;
-        if (page_visible(param_page)) return;
+    const unsigned first = modes[mode].first, n = modes[mode].count;
+    unsigned at = param_page - first;
+    for (unsigned tries = 0; tries < n; tries++) {
+        at = (at + (dir > 0 ? 1u : n - 1u)) % n;
+        if (page_visible(first + at)) { param_page = first + at; return; }
     }
+}
+
+/* After a voice or engine change the page may have emptied: fall back to the
+ * mode's first page with something on it. */
+static void page_fix(void)
+{
+    if (page_visible(param_page)) return;
+    for (unsigned i = 0; i < modes[mode].count; i++)
+        if (page_visible(modes[mode].first + i)) { param_page = modes[mode].first + i; return; }
+    param_page = modes[mode].first;
 }
 
 static unsigned visible_index(unsigned *count)
 {
     unsigned n = 0, at = 0;
-    for (unsigned pg = 0; pg < PAGES; pg++)
+    for (unsigned i = 0; i < modes[mode].count; i++) {
+        unsigned pg = modes[mode].first + i;
         if (page_visible(pg)) { if (pg == param_page) at = n; n++; }
+    }
     *count = n;
     return at;
 }
@@ -181,6 +220,30 @@ static void slot_value(const struct slot *s, char *text)
     fmt_uint(text, v);
 }
 
+/* Where a value sits in its range, for the bar: value 0..max, and whether
+ * the bar grows from the middle (pan, filter envelope). */
+static void slot_bar(const struct slot *s, unsigned *value, unsigned *max, int *bipolar)
+{
+    const struct drum_voice_params *vp = &kit.voice[voice];
+    const struct seq_voice_track *t = &pattern.voices[voice];
+    *value = 0; *max = 0; *bipolar = 0;
+    switch (s->kind) {
+    case PK_NONE: return;
+    case PK_E: if (slot_present(s)) { *value = vp->e[s->param]; *max = 127; } return;
+    case PK_C:
+        *value = vp->c[s->param]; *max = 127;
+        *bipolar = s->param == DC_PAN || s->param == DC_FENV;
+        return;
+    case PK_ENGINE: *value = vp->engine; *max = DRUM_ENGINES - 1; return;
+    case PK_CHOKE: *value = vp->choke; *max = DRUM_CHOKE_GROUPS; return;
+    case PK_LENGTH: *value = t->length; *max = SEQ_STEPS; return;
+    case PK_SPEED: *value = t->speed; *max = SEQ_SPEED_COUNT - 1; return;
+    case PK_SWING: *value = t->swing - 50u; *max = 25; return;
+    case PK_MUTE: *value = t->mute; *max = 1; return;
+    case PK_MASTER_LEN: *value = pattern.length; *max = SEQ_STEPS; return;
+    }
+}
+
 static void slot_edit(const struct slot *s, int delta)
 {
     struct drum_voice_params *vp = &kit.voice[voice];
@@ -243,6 +306,7 @@ static void draw_cell(unsigned v, unsigned i, int head)
     const struct seq_voice_track *t = &pattern.voices[v];
     const struct seq_step *st = &t->steps[step];
     uint16_t c;
+    if (mode != MODE_SEQ) return;              /* the grid is hidden while editing */
     if (step >= t->length) c = C_OUTSIDE;
     else if (head) c = st->on ? C_HEAD_ON : C_HEAD_OFF;
     else if (st->on) c = st->velocity >= 80 ? C_ON : C_ON_SOFT;
@@ -252,6 +316,7 @@ static void draw_cell(unsigned v, unsigned i, int head)
 
 static void draw_row_label(unsigned v)
 {
+    if (mode != MODE_SEQ) return;
     uint16_t c = v == voice ? COLOR_GOLD : pattern.voices[v].mute ? RGB565(80, 30, 30) : COLOR_DIM;
     draw_text(2, GRID_Y + v * CELL_H + 1, voice_labels[v], 1, c, COLOR_BG);
 }
@@ -273,50 +338,155 @@ static void draw_header(void)
               1, COLOR_DIM, COLOR_BG);
 }
 
-static void draw_strip(void)
+/* Text centred in a field w pixels wide and 16 high: scale 2 when it fits
+ * (letters 1 px closer for 5 characters, so neighbouring columns keep a gap),
+ * else scale 1. The whole field is painted, so no clear (and no flicker). */
+static void draw_field(unsigned x, unsigned y, unsigned w, const char *text, uint16_t fg)
 {
-    char head[40], *p = fmt_str(head, voice_labels[voice]);
+    unsigned len = (unsigned)strlen(text), scale = 2, pitch = 12;
+    if (len * 12u > w - 4u) pitch = 11;              /* 5 letters in 60 px */
+    if (len && (len - 1u) * pitch + 12u > w - 2u) { scale = 1; pitch = 6; }
+    if (len && (len - 1u) * pitch + 6u * scale > w) len = (w - 6u * scale) / pitch + 1u;
+    unsigned total = len ? (len - 1u) * pitch + 6u * scale : 0;
+    unsigned x0 = x + (w - total) / 2u, ty = scale == 1 ? y + 4u : y;
+    char one[2] = { 0, 0 };
+    if (x0 > x) fm1_screen_fill(x, y, x0 - x, 16, COLOR_BG);
+    if (scale == 1 && total) {
+        fm1_screen_fill(x0, y, total, 4, COLOR_BG);
+        fm1_screen_fill(x0, y + 12, total, 4, COLOR_BG);
+    }
+    for (unsigned i = 0; i < len; i++) {
+        one[0] = text[i];
+        draw_text(x0 + i * pitch, ty, one, scale, fg, COLOR_BG);
+    }
+    if (x0 + total < x + w) fm1_screen_fill(x0 + total, y, x + w - x0 - total, 16, COLOR_BG);
+}
+
+/* The four knob slots of what is being edited: names and values. */
+static void slot_texts(unsigned k, char *name, char *value, unsigned *bar, unsigned *max, int *bipolar)
+{
+    name[0] = value[0] = 0;
+    if (held_step >= 0) {
+        const struct seq_step *st = &pattern.voices[voice].steps[held_step];
+        static const char *const step_names[4] = { "VEL", "PROB", "RATCH", "ON" };
+        fmt_str(name, step_names[k]);
+        *bipolar = 0;
+        if (k == 0) { fmt_uint(value, st->velocity); *bar = st->velocity; *max = 127; }
+        if (k == 1) { fmt_uint(value, st->probability); *bar = st->probability; *max = 100; }
+        if (k == 2) { fmt_uint(value, st->ratchet); *bar = st->ratchet - 1u; *max = 3; }
+        if (k == 3) { fmt_str(value, st->on ? "ON" : "-"); *bar = st->on; *max = 1; }
+    } else {
+        const struct slot *s = &pages[param_page][k];
+        fmt_str(name, slot_name(s));
+        slot_value(s, value);
+        slot_bar(s, bar, max, bipolar);
+    }
+}
+
+static void edit_title(char *out)
+{
+    char *p = fmt_str(out, voice_labels[voice]);
     p = fmt_str(p, " ");
     if (held_step >= 0) {
         p = fmt_str(p, "STEP ");
         fmt_uint(p, (uint32_t)held_step + 1);
+    } else if (param_page < modes[MODE_ENGINE].first + modes[MODE_ENGINE].count || param_page == PAGE_QUICK) {
+        fmt_str(p, drum_engine_name(kit.voice[voice].engine));   /* "SD FM  2/3" */
     } else {
-        unsigned count, at = visible_index(&count);
-        p = fmt_str(p, page_names[param_page]);
-        p = fmt_str(p, "  ");
-        p = fmt_uint(p, at + 1);
+        fmt_str(p, page_names[param_page]);
+    }
+}
+
+static void draw_bar(unsigned x, unsigned value, unsigned max, int bipolar)
+{
+    /* Coloured span [a, b) measured from the top of the bar. */
+    unsigned a = BAR_H, b = BAR_H;
+    if (max) {
+        unsigned level = BAR_H - value * BAR_H / max;
+        if (bipolar) {
+            unsigned mid = BAR_H / 2u;
+            a = level < mid ? level : mid;
+            b = level < mid ? mid : level;
+            if (a == b) { a = mid - 1u; b = mid + 1u; }
+        } else {
+            a = level;
+            if (a >= BAR_H) a = BAR_H - 1u;       /* a sliver at zero: the slot exists */
+        }
+    }
+    x += (COL_W - BAR_W) / 2u;
+    if (a) fm1_screen_fill(x, BAR_Y, BAR_W, a, max ? C_BAR_OFF : COLOR_BG);
+    if (b > a) fm1_screen_fill(x, BAR_Y + a, BAR_W, b - a, COLOR_GOLD);
+    if (b < BAR_H) fm1_screen_fill(x, BAR_Y + b, BAR_W, BAR_H - b, max ? C_BAR_OFF : COLOR_BG);
+}
+
+/* Full-screen edit view (ENGINE, SHAPE, TIMING). */
+static void draw_edit(void)
+{
+    char t[40], *p;
+    unsigned count, at = visible_index(&count);
+    edit_title(t);
+    draw_line(2, TITLE_Y, t, 2, COLOR_GOLD, COLOR_BG);
+    if (held_step < 0 && count > 1) {
+        p = fmt_uint(t, at + 1);
         p = fmt_str(p, "/");
         fmt_uint(p, count);
+        draw_text(FM1_SCREEN_WIDTH - 2u - (unsigned)strlen(t) * 12u, TITLE_Y, t, 2, COLOR_DIM, COLOR_BG);
     }
-    draw_line(2, STRIP_Y, head, 1, COLOR_GOLD, COLOR_BG);
     for (unsigned k = 0; k < 4; k++) {                 /* KNOB1 .. KNOB4 */
-        char name[8] = "", value[8] = "";
-        if (held_step >= 0) {
-            const struct seq_step *st = &pattern.voices[voice].steps[held_step];
-            static const char *const step_names[4] = { "VEL", "PROB", "RATCH", "ON" };
-            fmt_str(name, step_names[k]);
-            if (k == 0) fmt_uint(value, st->velocity);
-            if (k == 1) fmt_uint(value, st->probability);
-            if (k == 2) fmt_uint(value, st->ratchet);
-            if (k == 3) fmt_str(value, st->on ? "ON" : "-");
-        } else {
-            const struct slot *s = &pages[param_page][k];
-            fmt_str(name, slot_name(s));
-            slot_value(s, value);
-        }
-        unsigned x = k * 60u;
-        fm1_screen_fill(x, STRIP_Y + 12, 60, 30, COLOR_BG);
-        draw_text(x + 2, STRIP_Y + 14, name, 1, COLOR_DIM, COLOR_BG);
-        draw_text(x, STRIP_Y + 25, value, 2, COLOR_TEXT, COLOR_BG);
+        char name[12], value[12];
+        unsigned bar = 0, max = 0;
+        int bipolar = 0;
+        slot_texts(k, name, value, &bar, &max, &bipolar);
+        draw_field(k * COL_W, NAME_Y, COL_W, name, COLOR_DIM);
+        draw_bar(k * COL_W, bar, max, bipolar);
+        draw_field(k * COL_W, VALUE_Y, COL_W, value, COLOR_TEXT);
     }
-    char hint[48];
-    p = fmt_str(hint, "SEL:VOICE  ALG:PAGE  PRE:");
+}
+
+/* Mode tabs, current one in gold: shows where EDIT goes next. */
+static void draw_tabs(void)
+{
+    unsigned x = 2;
+    for (unsigned m = 0; m < MODES; m++) {
+        x = draw_text(x, TABS_Y, modes[m].name, 1, m == mode ? COLOR_GOLD : COLOR_DIM, COLOR_BG);
+        x = draw_text(x, TABS_Y, "  ", 1, COLOR_DIM, COLOR_BG);
+    }
+}
+
+/* SEQ view: the quick strip under the grid. */
+static void draw_strip(void)
+{
+    char head[40];
+    if (mode != MODE_SEQ) { draw_edit(); return; }
+    edit_title(head);
+    draw_line(2, STRIP_Y, head, 1, COLOR_GOLD, COLOR_BG);
+    for (unsigned k = 0; k < 4; k++) {
+        char name[12], value[12];
+        unsigned bar, max;
+        int bipolar;
+        slot_texts(k, name, value, &bar, &max, &bipolar);
+        draw_field(k * COL_W, STRIP_Y + 12, COL_W, name, COLOR_DIM);
+        draw_field(k * COL_W, STRIP_Y + 30, COL_W, value, COLOR_TEXT);
+    }
+}
+
+static void draw_hint(void)
+{
+    char hint[48], *p;
+    if (mode == MODE_SEQ) {
+        p = fmt_str(hint, "EDIT:SOUND  ALG:P");
+        p = fmt_uint(p, page + 1);
+        p = fmt_str(p, "  PRE:");
+    } else {
+        p = fmt_str(hint, "EDIT:MODE  ALG:PAGE  PRE:");
+    }
     fmt_str(fmt_uint(p, pattern.bpm100 / 100), "BPM");
-    draw_line(2, STRIP_Y + 50, hint, 1, COLOR_DIM, COLOR_BG);
+    draw_line(2, mode == MODE_SEQ ? STRIP_Y + 52 : HINT_Y, hint, 1, COLOR_DIM, COLOR_BG);
 }
 
 static void draw_grid(void)
 {
+    if (mode != MODE_SEQ) return;
     for (unsigned v = 0; v < SEQ_VOICES; v++) {
         draw_row_label(v);
         for (unsigned i = 0; i < 16; i++) draw_cell(v, i, 0);
@@ -328,8 +498,17 @@ void drum_ui_redraw(void)
 {
     fm1_screen_fill(0, 0, FM1_SCREEN_WIDTH, FM1_SCREEN_HEIGHT, COLOR_BG);
     draw_header();
-    draw_grid();
+    if (mode == MODE_SEQ) draw_grid(); else draw_tabs();
     draw_strip();
+    draw_hint();
+}
+
+static void set_mode(unsigned m)
+{
+    mode = m % MODES;
+    param_page = modes[mode].first;
+    page_fix();
+    drum_ui_redraw();
 }
 
 void drum_ui_say(const char *text)
@@ -342,6 +521,7 @@ void drum_ui_say(const char *text)
 /* Playheads: each voice has its own (polyrhythms). */
 static void update_playheads(void)
 {
+    if (mode != MODE_SEQ) return;
     for (unsigned v = 0; v < SEQ_VOICES; v++) {
         unsigned step = audio_playing() ? seq_voice_step(&seq, &pattern, v) : 0xFF;
         uint8_t cell = step != 0xFF && step / 16 == page ? (uint8_t)(step % 16) : 0xFF;
@@ -363,15 +543,29 @@ static void update_leds(uint32_t keys)
         fm1_led_set(14 + black_keys[v], v == voice || (keys >> black_keys[v] & 1));
     fm1_led_set(BTN_PLAY, audio_playing());
     fm1_led_set(BTN_ENV, pads);
+    fm1_led_set(BTN_EDIT, mode != MODE_SEQ);
 }
 
 /* --- input ---------------------------------------------------------------- */
+
+/* Pattern page (steps 1-16, 17-32...): OCT-/OCT+, or ALGORITHM in SEQ. */
+static void step_page(int dir)
+{
+    if (dir < 0 && page) page--;
+    else if (dir > 0 && page + 1 < pages_in_pattern()) page++;
+    else return;
+    draw_grid();
+    draw_header();
+    draw_hint();
+}
 
 void drum_ui_init(void)
 {
     voice = 0;
     page = 0;
-    param_page = 0;
+    mode = MODE_SEQ;
+    param_page = PAGE_QUICK;
+    held_step = -1;
     drum_ui_redraw();
 }
 
@@ -390,9 +584,9 @@ int drum_ui_poll(uint32_t now)
     if (buttons_down >> BTN_PLAY & 1) {
         if (audio_playing()) audio_stop(); else audio_play();
     }
-    if (buttons_down >> BTN_OCT_DOWN & 1) { if (page) { page--; draw_grid(); } }
-    if (buttons_down >> BTN_OCT_UP & 1) { if (page + 1 < pages_in_pattern()) { page++; draw_grid(); } }
-    if (buttons_down >> BTN_EDIT & 1) { page_step(1); strip_dirty = 1; }
+    if (buttons_down >> BTN_OCT_DOWN & 1) step_page(-1);
+    if (buttons_down >> BTN_OCT_UP & 1) step_page(1);
+    if (buttons_down >> BTN_EDIT & 1) set_mode(mode + 1);
     if (buttons_down >> BTN_ENV & 1) { pads = !pads; }
     if (buttons_down >> BTN_SAVE & 1) {
         if (project_save(glo) != 0) drum_ui_say("SAVE FAILED");
@@ -408,6 +602,7 @@ int drum_ui_poll(uint32_t now)
             voice = v;
             draw_row_label(old);
             draw_row_label(v);
+            page_fix();
             strip_dirty = 1;
         }
     }
@@ -427,7 +622,8 @@ int drum_ui_poll(uint32_t now)
     if (held != held_step) { held_step = held; strip_dirty = 1; }
 
     /* Encoders. KNOB1..KNOB4: the page's four parameters (or the held
-     * step's). SELECT: voice. ALGORITHM: page. PRESETS: tempo. */
+     * step's). SELECT: voice. ALGORITHM: page of the mode (SEQ: pattern
+     * page). PRESETS: tempo. */
     for (unsigned e = 0; e < 7; e++) {
         int d = c.encoders[e];
         if (!d) continue;
@@ -437,12 +633,14 @@ int drum_ui_poll(uint32_t now)
             voice = (voice + SEQ_VOICES + (d > 0 ? 1u : SEQ_VOICES - 1u)) % SEQ_VOICES;
             draw_row_label(old);
             draw_row_label(voice);
-            if (!page_visible(param_page)) param_page = 0;
+            page_fix();
         } else if (e == ENC_ALGORITHM) {
-            page_step(d);
+            if (mode == MODE_SEQ) step_page(d);
+            else page_step(d);
         } else if (e == ENC_PRESETS) {
             tempo_edit(d);
             draw_header();
+            draw_hint();
         } else {
             unsigned k = e - ENC_K1;                 /* 0..3 */
             if (held_step >= 0) {
@@ -457,7 +655,7 @@ int drum_ui_poll(uint32_t now)
                 const struct slot *sl = &pages[param_page][k];
                 slot_edit(sl, d);
                 if (sl->kind == PK_LENGTH || sl->kind == PK_MASTER_LEN || sl->kind == PK_MUTE) draw_grid();
-                if (sl->kind == PK_ENGINE && !page_visible(param_page)) param_page = 0;
+                if (sl->kind == PK_ENGINE) page_fix();
             }
         }
         strip_dirty = 1;
