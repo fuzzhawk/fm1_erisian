@@ -130,9 +130,10 @@ jobs:
       - name: Tone with a key held
         run: |
           cd run
-          ../emu/target/release/fm1-emu --fwsc ../pkg/build/fm1.fwsc --ms 2500 --quiet \
-            --keys '300:pot:900,1000-2500:n7' --wav work/key.wav > work/key.log 2>&1 || true
-          tail -n 4 work/key.log
+          # (--quiet would also skip writing the WAV; key names as fm1-emu's panel)
+          ../emu/target/release/fm1-emu --fwsc ../pkg/build/fm1.fwsc --ms 2500 \
+            --keys '300:pot:900,1000-2500:C4' --wav work/key.wav > work/key.log 2>&1 || true
+          grep -E "^(time|wav|lcd)" work/key.log || tail -n 5 work/key.log
           # Only the keyed part: the tone runs from 1.0 s to 2.5 s.
           python3 - <<'PY'
           import wave
