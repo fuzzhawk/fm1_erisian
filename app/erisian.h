@@ -43,7 +43,9 @@ int drum_ui_poll(uint32_t now_ms);
 void drum_ui_say(const char *text);   /* short message in the header */
 
 /* --- main.c: services for the UI ----------------------------------------- */
-int project_save(void);        /* 0 = save started (finishes in the background) */
+/* Save the project. While playing it is written when the transport stops,
+ * unless now != 0 (GLO + SAVE), which writes at once and measures it. */
+int project_save(int now);
 const char *status_text(void); /* short line for the header */
 
 #endif

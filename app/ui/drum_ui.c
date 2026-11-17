@@ -259,8 +259,7 @@ int drum_ui_poll(uint32_t now)
     if (buttons_down >> BTN_EDIT & 1) { param_page = (param_page + 1) % 3; strip_dirty = 1; }
     if (buttons_down >> BTN_ENV & 1) { pads = !pads; }
     if (buttons_down >> BTN_SAVE & 1) {
-        int r = project_save();
-        drum_ui_say(r == 0 ? "SAVING..." : "SAVE FAILED");
+        if (project_save(glo) != 0) drum_ui_say("SAVE FAILED");
     }
     if (buttons_down) draw_header();
 

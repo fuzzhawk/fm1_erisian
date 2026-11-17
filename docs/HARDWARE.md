@@ -85,3 +85,11 @@ Verified on Charles's unit (0x856014).
   erase/write, and a save erased a sector and wrote ~3.4 KB in one go.
   Next build: pre-erase free sectors while stopped, write saves in 256-byte
   chunks.
+
+### 2026-11-17 — chunked saves (CI run 29, sha256 474b050a…) — still stutters
+Verified on Charles's unit (0x856014).
+- Saves work and persist, but SAVE while playing still gives a tempo hiccup
+  and a choppy, buzzy sound. Reading: each flash operation holds up audio
+  rendering (skipped blocks), and many small writes made it choppier.
+- Next build: save on STOP by default; GLO + SAVE forces an immediate,
+  measured save (status page: duration, writes, erases, missed audio blocks).

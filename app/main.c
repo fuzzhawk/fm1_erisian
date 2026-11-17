@@ -38,9 +38,33 @@ struct project_file {
 
 /* --- flash and store ----------------------------------------------------- */
 
-static int flash_read(void *c, uint32_t o, void *d, size_t n) { (void)c; return fm1_flash_read(o, d, n); }
-static int flash_write(void *c, uint32_t o, const void *d, size_t n) { (void)c; return fm1_flash_write(o, d, n); }
-static int flash_erase(void *c, uint32_t o) { (void)c; return fm1_flash_erase(o); }
+/* Flash access, counted and timed (see the save report on the status page). */
+struct flash_stats;
+static void flash_count(int kind, uint32_t ms);
+static int flash_read(void *c, uint32_t o, void *d, size_t n)
+{
+    (void)c;
+    uint32_t t = fm1_millis();
+    int r = fm1_flash_read(o, d, n);
+    flash_count(0, fm1_millis() - t);
+    return r;
+}
+static int flash_write(void *c, uint32_t o, const void *d, size_t n)
+{
+    (void)c;
+    uint32_t t = fm1_millis();
+    int r = fm1_flash_write(o, d, n);
+    flash_count(1, fm1_millis() - t);
+    return r;
+}
+static int flash_erase(void *c, uint32_t o)
+{
+    (void)c;
+    uint32_t t = fm1_millis();
+    int r = fm1_flash_erase(o);
+    flash_count(2, fm1_millis() - t);
+    return r;
+}
 
 static struct store_flash flash_dev = { NULL, 0, flash_read, flash_write, flash_erase };
 static struct store store;
@@ -119,45 +143,86 @@ static void apply_kit(void)
 
 /* --- project ------------------------------------------------------------- */
 
-/* Saving while the beat plays: the runtime silences audio during every
- * flash erase and write, so a save takes a snapshot and writes it in small
- * chunks, one per control tick, into space store_prepare() erased earlier
- * (while stopped). The store's commit rules still apply: the old project
- * stays valid until the new header is written. */
-#define SAVE_CHUNK 256u
+/* Saving while the beat plays. On hardware (2026-11-17) every flash erase
+ * or write holds up audio rendering: blocks are skipped (buzz) and the
+ * sequencer, which runs on rendered audio, hiccups. Splitting a save into
+ * small writes made it choppier. So SAVE while playing takes a snapshot and
+ * writes it in one go when the transport stops; GLO + SAVE forces an
+ * immediate save and measures what it costs (status page). The store's
+ * commit rules apply either way. */
 static struct project_file save_buf;
-static uint32_t save_at;
-static int saving;
+static int save_pending;
 
-int project_save(void)
+struct flash_stats { uint32_t reads, writes, erases, max_ms; };
+static struct flash_stats fstats;
+
+struct save_report {
+    uint32_t ms, writes, erases, max_ms, missed_blocks, overruns;
+    int playing, result, valid;
+};
+static struct save_report last_save;
+
+static void flash_count(int kind, uint32_t ms)
 {
-    if (rescue || store_state != 0) return STORE_READ_ONLY;
-    if (saving || store.stream.active) return STORE_INVALID; /* busy */
+    if (kind == 0) fstats.reads++;
+    else if (kind == 1) { fstats.writes++; if (ms > fstats.max_ms) fstats.max_ms = ms; }
+    else { fstats.erases++; if (ms > fstats.max_ms) fstats.max_ms = ms; }
+}
+
+static void snapshot(void)
+{
     save_buf.magic = PROJECT_MAGIC;
     save_buf.version = PROJECT_VERSION;
     save_buf.bytes = (uint16_t)sizeof save_buf;
     save_buf.pattern = pattern;
     save_buf.kit = kit;
-    int r = store_begin(&store, PROJECT_KEY, sizeof save_buf);
-    if (r) return r;
-    save_at = 0;
-    saving = 1;
-    return STORE_OK;
 }
 
-static void save_poll(void)
+static int save_flush(void)
 {
-    if (!saving) return;
-    uint32_t left = sizeof save_buf - save_at;
-    uint32_t n = left < SAVE_CHUNK ? left : SAVE_CHUNK;
-    int r = store_append(&store, (const uint8_t *)&save_buf + save_at, n);
-    if (r == STORE_OK) {
-        save_at += n;
-        if (save_at < sizeof save_buf) return;
-        r = store_commit(&store, store_crc32(&save_buf, sizeof save_buf, 0));
-    }
-    saving = 0;
-    drum_ui_say(r == STORE_OK ? "SAVED" : "SAVE FAILED");
+    struct fm1_audio_stats a0, a1;
+    fstats.max_ms = 0;                 /* longest single operation in this save */
+    struct flash_stats f0 = fstats;
+    fm1_audio_stats_read(&a0);
+    const uint32_t t0 = fm1_millis();
+    int r = store_write(&store, PROJECT_KEY, &save_buf, sizeof save_buf);
+    const uint32_t t1 = fm1_millis();
+    fm1_audio_stats_read(&a1);
+    save_pending = 0;
+
+    /* Blocks the audio should have rendered in that time vs. what it did. */
+    uint32_t ms = t1 - t0;
+    uint32_t expected = (ms * 441u + 639u) / 1280u;   /* ms * 44100 / 128 / 1000 */
+    uint32_t got = a1.blocks - a0.blocks;
+    last_save.ms = ms;
+    last_save.writes = fstats.writes - f0.writes;
+    last_save.erases = fstats.erases - f0.erases;
+    last_save.max_ms = fstats.max_ms;
+    last_save.missed_blocks = expected > got ? expected - got : 0;
+    last_save.overruns = a1.overruns - a0.overruns;
+    last_save.playing = audio_playing();
+    last_save.result = r;
+    last_save.valid = 1;
+
+    char t[32], *p = fmt_str(t, r == STORE_OK ? "SAVED " : "SAVE FAILED ");
+    p = fmt_uint(p, ms);
+    p = fmt_str(p, "MS -");
+    p = fmt_uint(p, last_save.missed_blocks);
+    fmt_str(p, "BLK");
+    drum_ui_say(t);
+    return r;
+}
+
+int project_save(int now)
+{
+    if (rescue || store_state != 0) return STORE_READ_ONLY;
+    if (store.stream.active) return STORE_INVALID;   /* an upload is running */
+    snapshot();
+    if (now || !audio_playing())
+        return save_flush();
+    save_pending = 1;
+    drum_ui_say("SAVE PENDING: STOP TO WRITE");
+    return STORE_OK;
 }
 
 static void project_load(void)
@@ -237,6 +302,27 @@ static void draw_status_page(void)
         draw_line(8, 108, kick_state ? "KICK ERROR" : "KICK NONE", 2, COLOR_DIM, COLOR_BG);
     }
     draw_line(8, 132, upload_text, 2, COLOR_TEXT, COLOR_BG);
+    if (last_save.valid) {
+        p = fmt_str(t, "LAST SAVE ");
+        p = fmt_uint(p, last_save.ms);
+        p = fmt_str(p, "MS W");
+        p = fmt_uint(p, last_save.writes);
+        p = fmt_str(p, " E");
+        p = fmt_uint(p, last_save.erases);
+        p = fmt_str(p, last_save.playing ? " PLAYING" : " STOPPED");
+        draw_line(8, 160, t, 1, COLOR_TEXT, COLOR_BG);
+        p = fmt_str(t, "AUDIO MISSED ");
+        p = fmt_uint(p, last_save.missed_blocks);
+        p = fmt_str(p, " BLK  OVR ");
+        p = fmt_uint(p, last_save.overruns);
+        p = fmt_str(p, "  MAX OP ");
+        p = fmt_uint(p, last_save.max_ms);
+        fmt_str(p, "MS");
+        draw_line(8, 172, t, 1, COLOR_TEXT, COLOR_BG);
+    }
+    p = fmt_str(t, "ERASED FREE ");
+    fmt_str(fmt_uint(p, store_state == 0 ? store_erased_sectors(&store) * 4 : 0), "K");
+    draw_line(8, 184, t, 1, COLOR_DIM, COLOR_BG);
     draw_line(8, 200, "HOME: BACK TO DRUMS", 1, COLOR_DIM, COLOR_BG);
     draw_line(8, 212, "UPLOAD KICK: ERISIAN-UPLOADER.HTML", 1, COLOR_DIM, COLOR_BG);
 }
@@ -315,12 +401,13 @@ void groove_screen_control(void)
     handle_upload();
     if (now - last_poll < 10u) return;
     last_poll = now;
-    save_poll();
+    if (save_pending && !audio_playing())
+        save_flush();   /* deferred save: the beat just stopped */
 
     /* Erase free flash in the background, only while the beat is stopped
      * (an erase pauses audio), so saves during playback never erase. */
     static uint32_t last_prepare;
-    if (booted && !rescue && store_state == 0 && !saving && !store.stream.active &&
+    if (booted && !rescue && store_state == 0 && !save_pending && !store.stream.active &&
         !audio_playing() && now - last_prepare >= 50u) {
         last_prepare = now;
         store_prepare(&store);
