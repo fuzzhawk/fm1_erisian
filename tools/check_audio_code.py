@@ -14,7 +14,7 @@ import sys
 
 AUDIO = re.compile(r"^(fm1_app_render|fm1_output_mix|drums_render|drums_trigger|render_voice|"
                    r"sine|decay|mix_master|seq_render|on_pulse|next_random|seq_speed_period|"
-                   r"seq_voice_step|seq_stop)$")
+                   r"seq_voice_step|seq_stop|engine_sample|transient|svf2x|soft15|rnd|white|clamp15)$")
 RAM_LO, RAM_HI = 0x01C00000, 0x01C80000
 FLASH_LO, FLASH_HI = 0x02000000, 0x02100000
 

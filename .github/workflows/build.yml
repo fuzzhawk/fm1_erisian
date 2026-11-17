@@ -90,7 +90,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: demo-audio-${{ github.sha }}
-          path: build-host/demo.wav
+          path: |
+            build-host/demo.wav
+            build-host/engines.wav
 
   # Boot each package in the FM-1 emulator (joakimeriksson/fm1-emu, MIT)
   # before anyone flashes it. A halt or a repeated reset fails the build.

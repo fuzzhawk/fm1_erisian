@@ -39,5 +39,12 @@ print("/* 20 Hz .. 2 kHz exponential, as 32-bit phase increments at 44.1 kHz. */
 print("uint32_t table_tune[128] FM1_AUDIO_DATA = {\n" + rows(tune, 6) + "\n};\n")
 print("/* Envelope factor per sample, Q30: 3 ms .. 3 s to -60 dB. */")
 print("uint32_t table_decay[128] FM1_AUDIO_DATA = {\n" + rows(decay, 6) + "\n};\n")
+# State-variable filter (Chamberlin, run at 2x): f = 2 sin(pi fc / (2 fs)),
+# Q14, 128 cutoffs from 30 Hz to 16 kHz.
+svf_hz = [30 * ((16000 / 30) ** (i / 127)) for i in range(128)]
+svf = [round(2 * math.sin(math.pi * f / (2 * RATE)) * 16384) for f in svf_hz]
+
+print("/* Chamberlin SVF at 2x oversampling: f = 2 sin(pi fc / 2fs), Q14, 30 Hz .. 16 kHz. */")
+print("uint16_t table_svf[128] FM1_AUDIO_DATA = {\n" + rows(svf) + "\n};\n")
 print("/* FM modulator ratios, Q8. */")
 print("uint16_t table_ratio[16] FM1_AUDIO_DATA = {\n" + rows(ratio_q8) + "\n};")

@@ -71,6 +71,14 @@ Rules that follow:
 | Wav kick | Charles's own sample, ~30 KB, 16-bit mono 44.1 kHz (~0.34 s), **uncompressed**. Stored in user flash (uploaded once with tools/uploader), loaded into RAM at boot, played from RAM. |
 | Noise | Tempo-synced riser/fall (1/2/4 bars) with filter sweep and pitch; impact/boom (thump + sub drop + tail). |
 
+### Implementation (2026-11-17)
+Each voice: engine (13 engine parameters, labelled per engine) → common chain
+(transient → drive → SVF filter LP/HP/BP with envelope → bit crush →
+sample-and-hold → texture → level/pan). UI pages: ENGINE, ENGINE 2, FILTER,
+LO-FI, TIMING. Engines built: SAMPLE, FM, KS, METAL (+ tempo-synced reverse),
+SHAKER, OBJECT (wood/plastic/tin/bottle/glass, crunch, rattle), NOISE
+(rise/fall/impact in steps). Projects saved before this convert on load.
+
 ### Lo-fi & transient layer (per voice)
 Transient generator (click/snap/thump), vinyl/tape texture (crackle, hiss,
 wow/flutter), bitcrush + sample-rate reduction.

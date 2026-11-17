@@ -16,7 +16,7 @@ enum { ENC_SELECT, ENC_ALGORITHM, ENC_K1, ENC_K2, ENC_K3, ENC_K4, ENC_PRESETS };
 static const uint8_t black_keys[11] = { 1, 3, 5, 8, 10, 13, 15, 17, 20, 22, 25 };
 static const uint8_t white_keys[16] = { 0, 2, 4, 6, 7, 9, 11, 12, 14, 16, 18, 19, 21, 23, 24, 26 };
 static const char *const voice_labels[11] = {
-    "BD", "SD", "CH", "OH", "LT", "HT", "CP", "RM", "CB", "FK", "CY",
+    "BD", "SD", "CH", "OH", "LT", "HT", "CP", "WD", "SH", "FK", "RV",
 };
 
 /* Layout. */
@@ -35,7 +35,7 @@ static const char *const voice_labels[11] = {
 
 static unsigned voice;          /* selected voice */
 static unsigned page;           /* 0..3: steps page*16 .. +15 */
-static unsigned param_page;     /* 0 sound, 1 FM/noise, 2 voice timing */
+static unsigned param_page;     /* see page_names */
 static int pads;                /* ENV: black keys also play */
 static int held_step = -1;      /* step key held: encoders edit the step */
 static uint8_t drawn_head[SEQ_VOICES];
@@ -44,24 +44,45 @@ static uint32_t message_until;
 
 /* --- parameter pages ------------------------------------------------------ */
 
-enum { PK_PARAM, PK_ENGINE, PK_CHOKE, PK_LENGTH, PK_SPEED, PK_SWING, PK_MUTE,
+/* Five pages for the 7 encoders. The ENGINE pages are labelled by the
+ * selected voice's engine (drum_engine_param_name). */
+enum { PK_E, PK_C, PK_ENGINE, PK_CHOKE, PK_LENGTH, PK_SPEED, PK_SWING, PK_MUTE,
        PK_MASTER_LEN, PK_BPM };
 struct slot { uint8_t kind, param; const char *name; };
-static const struct slot pages[3][7] = {
-    { { PK_ENGINE, 0, "ENGIN" }, { PK_PARAM, DP_LEVEL, "LEVEL" }, { PK_PARAM, DP_TUNE, "TUNE" },
-      { PK_PARAM, DP_DECAY, "DECAY" }, { PK_PARAM, DP_PITCH_ENV, "P.ENV" },
-      { PK_PARAM, DP_PITCH_DECAY, "P.DEC" }, { PK_PARAM, DP_PAN, "PAN" } },
-    { { PK_PARAM, DP_RATIO, "RATIO" }, { PK_PARAM, DP_MOD, "MOD" }, { PK_PARAM, DP_MOD_DECAY, "M.DEC" },
-      { PK_PARAM, DP_FEEDBACK, "FDBK" }, { PK_PARAM, DP_NOISE, "NOISE" },
-      { PK_PARAM, DP_NOISE_DECAY, "N.DEC" }, { PK_PARAM, DP_NOISE_TONE, "N.TON" } },
+#define PAGES 5u
+static const struct slot pages[PAGES][7] = {
+    { { PK_ENGINE, 0, "ENGIN" }, { PK_E, 0, 0 }, { PK_E, 1, 0 }, { PK_E, 2, 0 },
+      { PK_E, 3, 0 }, { PK_E, 4, 0 }, { PK_E, 5, 0 } },
+    { { PK_E, 6, 0 }, { PK_E, 7, 0 }, { PK_E, 8, 0 }, { PK_E, 9, 0 },
+      { PK_E, 10, 0 }, { PK_E, 11, 0 }, { PK_E, 12, 0 } },
+    { { PK_C, DC_LEVEL, 0 }, { PK_C, DC_PAN, 0 }, { PK_C, DC_FTYPE, 0 }, { PK_C, DC_CUTOFF, 0 },
+      { PK_C, DC_RESO, 0 }, { PK_C, DC_DRIVE, 0 }, { PK_C, DC_FENV, 0 } },
+    { { PK_C, DC_BITS, 0 }, { PK_C, DC_RATE, 0 }, { PK_C, DC_TRANS, 0 }, { PK_C, DC_TLEVEL, 0 },
+      { PK_C, DC_TEXTURE, 0 }, { PK_C, DC_XLEVEL, 0 }, { PK_C, DC_FDECAY, 0 } },
     { { PK_BPM, 0, "BPM" }, { PK_MASTER_LEN, 0, "P.LEN" }, { PK_LENGTH, 0, "LEN" },
       { PK_SPEED, 0, "SPEED" }, { PK_SWING, 0, "SWING" }, { PK_CHOKE, 0, "CHOKE" },
       { PK_MUTE, 0, "MUTE" } },
 };
-static const char *const page_names[3] = { "SOUND", "FM+NOISE", "TIMING" };
+static const char *const page_names[PAGES] = { "ENGINE", "ENGINE 2", "FILTER", "LO-FI", "TIMING" };
 static const char *const speed_names[SEQ_SPEED_COUNT] = { "2X", "1X", "3/4", "1/2", "1/4" };
+static const char *const ftype_names[4] = { "OFF", "LP", "HP", "BP" };
+static const char *const trans_names[4] = { "OFF", "CLICK", "SNAP", "THUMP" };
+static const char *const texture_names[4] = { "OFF", "CRACK", "HISS", "BOTH" };
+static const char *const excite_names[4] = { "NOISE", "CLICK", "KICK", "MALLT" };
+static const char *const material_names[5] = { "WOOD", "PLAST", "TIN", "BOTTL", "GLASS" };
+static const char *const noise_modes[3] = { "RISE", "FALL", "IMPCT" };
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+static const char *slot_name(const struct slot *s)
+{
+    if (s->kind == PK_E) {
+        const char *n = drum_engine_param_name(kit.voice[voice].engine, s->param);
+        return n ? n : "";
+    }
+    if (s->kind == PK_C) return drum_common_name(s->param);
+    return s->name;
+}
 
 static int slot_value(const struct slot *s, char *text)
 {
@@ -69,7 +90,27 @@ static int slot_value(const struct slot *s, char *text)
     struct seq_voice_track *t = &pattern.voices[voice];
     int v = 0;
     switch (s->kind) {
-    case PK_PARAM: v = vp->p[s->param]; break;
+    case PK_E: {
+        if (!drum_engine_param_name(vp->engine, s->param)) { text[0] = 0; return 0; }
+        v = vp->e[s->param];
+        if (vp->engine == DRUM_KS && s->param == KS_EXCITE) { fmt_str(text, excite_names[(v >> 5) & 3]); return v; }
+        if (vp->engine == DRUM_OBJECT && s->param == OB_MATERIAL) { fmt_str(text, material_names[v * 5 / 128]); return v; }
+        if (vp->engine == DRUM_NOISE && s->param == NZ_MODE) { fmt_str(text, noise_modes[v * 3 / 128]); return v; }
+        if (vp->engine == DRUM_NOISE && s->param == NZ_LENGTH) { fmt_str(fmt_uint(text, 1u + v / 2u), "ST"); return v; }
+        if (vp->engine == DRUM_METAL && s->param == MT_REVERSE) {
+            if (!v) fmt_str(text, "OFF"); else fmt_str(fmt_uint(text, 1u + v * 16u / 128u), "ST");
+            return v;
+        }
+        break;
+    }
+    case PK_C:
+        v = vp->c[s->param];
+        if (s->param == DC_FTYPE) { fmt_str(text, ftype_names[(v >> 5) & 3]); return v; }
+        if (s->param == DC_TRANS) { fmt_str(text, trans_names[(v >> 5) & 3]); return v; }
+        if (s->param == DC_TEXTURE) { fmt_str(text, texture_names[(v >> 5) & 3]); return v; }
+        if (s->param == DC_BITS) { fmt_str(fmt_uint(text, 16u - (127u - v) * 12u / 127u), "B"); return v; }
+        if (s->param == DC_RATE) { fmt_str(fmt_uint(fmt_str(text, "/"), 1u + v / 4u), ""); return v; }
+        break;
     case PK_ENGINE: fmt_str(text, drum_engine_name(vp->engine)); return vp->engine;
     case PK_CHOKE: v = vp->choke; if (!v) { fmt_str(text, "-"); return 0; } break;
     case PK_LENGTH: v = t->length; break;
@@ -88,8 +129,16 @@ static void slot_edit(const struct slot *s, int delta)
     struct drum_voice_params *vp = &kit.voice[voice];
     struct seq_voice_track *t = &pattern.voices[voice];
     switch (s->kind) {
-    case PK_PARAM: vp->p[s->param] = (uint8_t)clampi(vp->p[s->param] + delta, 0, 127); break;
-    case PK_ENGINE: vp->engine = (uint8_t)clampi(vp->engine + (delta > 0 ? 1 : -1), 0, DRUM_ENGINES - 1); break;
+    case PK_E:
+        if (!drum_engine_param_name(vp->engine, s->param)) return;
+        vp->e[s->param] = (uint8_t)clampi(vp->e[s->param] + delta, 0, 127);
+        break;
+    case PK_C: vp->c[s->param] = (uint8_t)clampi(vp->c[s->param] + delta, 0, 127); break;
+    case PK_ENGINE: {
+        int e = clampi(vp->engine + (delta > 0 ? 1 : -1), 0, DRUM_ENGINES - 1);
+        if (e != vp->engine) drum_voice_engine_defaults(vp, (unsigned)e);
+        break;
+    }
     case PK_CHOKE: vp->choke = (uint8_t)clampi(vp->choke + (delta > 0 ? 1 : -1), 0, DRUM_CHOKE_GROUPS); break;
     case PK_LENGTH: t->length = (uint8_t)clampi(t->length + delta, 1, SEQ_STEPS); break;
     case PK_SPEED: t->speed = (uint8_t)clampi(t->speed + (delta > 0 ? 1 : -1), 0, SEQ_SPEED_COUNT - 1); break;
@@ -98,9 +147,10 @@ static void slot_edit(const struct slot *s, int delta)
     case PK_MASTER_LEN: pattern.length = (uint8_t)clampi(pattern.length + delta, 1, SEQ_STEPS); break;
     case PK_BPM:
         pattern.bpm100 = (uint16_t)clampi(pattern.bpm100 + delta * 100, SEQ_BPM_MIN, SEQ_BPM_MAX);
+        drums_set_tempo(&drums, &kit, pattern.bpm100);
         break;
     }
-    if (s->kind == PK_PARAM || s->kind == PK_ENGINE || s->kind == PK_CHOKE)
+    if (s->kind == PK_E || s->kind == PK_C || s->kind == PK_ENGINE || s->kind == PK_CHOKE)
         drums_prepare_voice(&drums, &kit, voice);
 }
 
@@ -169,7 +219,7 @@ static void draw_strip(void)
             if (k == 3) fmt_uint(value, st->ratchet);
         } else {
             const struct slot *s = &pages[param_page][k];
-            fmt_str(name, s->name);
+            fmt_str(name, slot_name(s));
             slot_value(s, value);
         }
         unsigned x = 2 + (k % 4) * 60, y = STRIP_Y + 14 + (k / 4) * 30;
@@ -256,7 +306,7 @@ int drum_ui_poll(uint32_t now)
     }
     if (buttons_down >> BTN_OCT_DOWN & 1) { if (page) { page--; draw_grid(); } }
     if (buttons_down >> BTN_OCT_UP & 1) { if (page + 1 < pages_in_pattern()) { page++; draw_grid(); } }
-    if (buttons_down >> BTN_EDIT & 1) { param_page = (param_page + 1) % 3; strip_dirty = 1; }
+    if (buttons_down >> BTN_EDIT & 1) { param_page = (param_page + 1) % PAGES; strip_dirty = 1; }
     if (buttons_down >> BTN_ENV & 1) { pads = !pads; }
     if (buttons_down >> BTN_SAVE & 1) {
         if (project_save(glo) != 0) drum_ui_say("SAVE FAILED");
@@ -304,13 +354,13 @@ int drum_ui_poll(uint32_t now)
             draw_cell(voice, (unsigned)held_step % 16, 0);
             drawn_head[voice] = 0xFF;
         } else if (glo) {
-            slot_edit(&pages[2][e], d);
+            slot_edit(&pages[PAGES - 1][e], d);
             draw_header();
             if (e == 1 || e == 2) draw_grid();
         } else {
             slot_edit(&pages[param_page][e], d);
-            if (param_page == 2 && (e == 1 || e == 2)) draw_grid();
-            if (param_page == 2 && e == 0) draw_header();
+            if (param_page == PAGES - 1 && (e == 1 || e == 2)) draw_grid();
+            if (param_page == PAGES - 1 && e == 0) draw_header();
         }
         strip_dirty = 1;
     }

@@ -26,7 +26,7 @@
 
 #define PROJECT_KEY 0x01u
 #define PROJECT_MAGIC 0x31505245u /* "ERP1" */
-#define PROJECT_VERSION 1u
+#define PROJECT_VERSION 2u
 
 struct project_file {
     uint32_t magic;
@@ -34,6 +34,15 @@ struct project_file {
     uint16_t bytes;
     struct seq_pattern pattern;
     struct drum_kit kit;
+};
+
+/* Version 1 (before the engine refactor): same pattern, old kit layout. */
+struct project_file_v1 {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t bytes;
+    struct seq_pattern pattern;
+    struct drum_kit_v1 kit;
 };
 
 /* --- flash and store ----------------------------------------------------- */
@@ -138,6 +147,7 @@ static void apply_kit(void)
 {
     if (kit.voice[0].engine == DRUM_SAMPLE && kick_state != 1)
         drum_voice_fm_kick(&kit.voice[0]);
+    drums_set_tempo(&drums, &kit, pattern.bpm100);
     drums_prepare(&drums, &kit);
 }
 
@@ -230,15 +240,21 @@ int project_save(int now)
 
 static void project_load(void)
 {
-    static struct project_file f;
+    static union { struct project_file v2; struct project_file_v1 v1; } f;
     size_t got;
     if (store_state == 0 &&
         store_read(&store, PROJECT_KEY, &f, sizeof f, &got) == STORE_OK &&
-        got == sizeof f && f.magic == PROJECT_MAGIC && f.version == PROJECT_VERSION &&
-        f.bytes == sizeof f) {
-        pattern = f.pattern;
-        kit = f.kit;
-        return;
+        f.v2.magic == PROJECT_MAGIC) {
+        if (f.v2.version == PROJECT_VERSION && got == sizeof f.v2 && f.v2.bytes == sizeof f.v2) {
+            pattern = f.v2.pattern;
+            kit = f.v2.kit;
+            return;
+        }
+        if (f.v1.version == 1 && got == sizeof f.v1 && f.v1.bytes == sizeof f.v1) {
+            pattern = f.v1.pattern;                  /* migrate: kit to the new layout */
+            drum_kit_from_v1(&kit, &f.v1.kit);
+            return;
+        }
     }
     /* First boot: the default kit and a starter beat. */
     seq_pattern_init(&pattern);
@@ -361,9 +377,7 @@ static void handle_upload(void)
     } else if (cmd == UPLOAD_END) {
         kick_load();
         if (kick_state == 1 && kit.voice[0].engine != DRUM_SAMPLE) {
-            kit.voice[0].engine = DRUM_SAMPLE;   /* a fresh kick goes on voice 1 */
-            kit.voice[0].p[DP_TUNE] = 64;
-            kit.voice[0].p[DP_DECAY] = 127;
+            drum_voice_engine_defaults(&kit.voice[0], DRUM_SAMPLE);   /* fresh kick on voice 1 */
         }
         apply_kit();
         fmt_str(upload_text, kick_state == 1 ? "KICK SAVED" : "UPLOAD FAILED");
