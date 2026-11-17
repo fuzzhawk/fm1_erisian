@@ -85,27 +85,55 @@ def run(command: list[str], *, capture: bool = False) -> subprocess.CompletedPro
     return result
 
 
-def find_toolchain(explicit: str | None) -> Path:
-    candidates: list[Path] = []
-    if explicit:
-        base = Path(explicit).expanduser()
-        candidates += [base / "bin", base / "pi32v2" / "bin", base]
-    for name in ("FM1_PI32_TOOLCHAIN", "JIELI_TOOLCHAIN"):
-        value = os.environ.get(name)
+def _search_roots(explicit: str | None) -> list[Path]:
+    roots: list[Path] = []
+    for value in (explicit, os.environ.get("FM1_PI32_TOOLCHAIN"),
+                  os.environ.get("JIELI_TOOLCHAIN")):
         if value:
-            base = Path(value).expanduser()
-            candidates += [base / "bin", base / "pi32v2" / "bin", base]
-    candidates += [
-        Path.home() / ".jieli" / "toolchain" / "pi32v2" / "bin",
-        Path.home() / ".jieli" / "toolchain" / "bin",
-        Path.home() / ".jieli" / "toolchain" / "common" / "bin",
-    ]
-    for candidate in candidates:
-        if (candidate / "clang").is_file() and (candidate / "ld").is_file():
-            return candidate
-    raise BuildError(
-        "cannot find the JieLi PI32v2 toolchain; set FM1_PI32_TOOLCHAIN "
-        "to the directory containing bin/clang and bin/ld")
+            roots.append(Path(value).expanduser())
+    roots += [Path.home() / ".jieli" / "toolchain", Path.home() / ".jieli"]
+    return roots
+
+
+def _find_tool(names: tuple[str, ...], roots: list[Path],
+               override: str) -> Path | None:
+    value = os.environ.get(override)
+    if value:
+        path = Path(value).expanduser()
+        return path if path.is_file() else None
+    for root in roots:
+        if not root.is_dir():
+            continue
+        # Prefer the PI32v2-specific directory over shared ones.
+        candidates = [root / "bin", root / "pi32v2" / "bin", root]
+        candidates += sorted(root.glob("*/pi32v2/bin"))
+        candidates += sorted(root.glob("*/bin")) + sorted(root.glob("*/*/bin"))
+        for directory in candidates:
+            for name in names:
+                if (directory / name).is_file():
+                    return directory / name
+    return None
+
+
+def find_toolchain(explicit: str | None) -> tuple[Path, Path, Path]:
+    """Return (clang, ld, objcopy). The JieLi archive may keep clang and the
+    PI32v2 binutils in different bin directories, so each is found on its own.
+    FM1_PI32_CLANG / FM1_PI32_LD / FM1_PI32_OBJCOPY override the search."""
+    roots = _search_roots(explicit)
+    clang = _find_tool(("clang",), roots, "FM1_PI32_CLANG")
+    linker = _find_tool(("ld", "pi32v2-ld", "lto-wrapper-ld"), roots,
+                        "FM1_PI32_LD")
+    objcopy = _find_tool(("objcopy", "pi32v2-objcopy", "llvm-objcopy"),
+                         roots, "FM1_PI32_OBJCOPY")
+    missing = [name for name, path in
+               (("clang", clang), ("ld", linker), ("objcopy", objcopy))
+               if path is None]
+    if missing:
+        raise BuildError(
+            "cannot find the JieLi PI32v2 toolchain (" + ", ".join(missing)
+            + "); set FM1_PI32_TOOLCHAIN to its install directory or "
+            "FM1_PI32_CLANG / FM1_PI32_LD / FM1_PI32_OBJCOPY")
+    return clang, linker, objcopy
 
 
 def sha256(path: Path) -> str:
@@ -184,11 +212,8 @@ def main() -> int:
         if not any(app.glob("*.c")):
             raise BuildError(f"no C sources in application directory {app}")
 
-        bin_directory = find_toolchain(arguments.toolchain)
-        clang = bin_directory / "clang"
-        linker = bin_directory / "ld"
-        objcopy = bin_directory / "objcopy"
-        print(f"toolchain: {bin_directory}")
+        clang, linker, objcopy = find_toolchain(arguments.toolchain)
+        print(f"toolchain: clang={clang} ld={linker} objcopy={objcopy}")
 
         objects_directory = output / "obj"
         generated = output / "generated"

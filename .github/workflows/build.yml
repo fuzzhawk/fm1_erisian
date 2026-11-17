@@ -30,12 +30,10 @@ jobs:
         if: steps.tc-cache.outputs.cache-hit != 'true'
         run: sh tools/fetch_toolchain.sh
 
-      - name: Locate compiler
+      - name: Show toolchain layout
         run: |
-          CLANG=$(find ~/.jieli -path '*/bin/clang' -type f | head -n1)
-          test -n "$CLANG" || { echo "clang not found"; find ~/.jieli -maxdepth 3; exit 1; }
-          echo "FM1_PI32_TOOLCHAIN=$(dirname "$(dirname "$CLANG")")" >> "$GITHUB_ENV"
-          "$CLANG" --version
+          echo "FM1_PI32_TOOLCHAIN=$HOME/.jieli" >> "$GITHUB_ENV"
+          find ~/.jieli -maxdepth 4 -type d -name bin -print -exec ls {} \;
 
       - name: Build firmware
         run: python3 tools/build.py --clean --package
