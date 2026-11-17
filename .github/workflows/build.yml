@@ -126,7 +126,9 @@ jobs:
             tail -n 60 work/erisian.log
             echo "::error::ERISIAN halted in the emulator; do not flash this build"; exit 1
           fi
-          resets=$(grep -c "chip reset" work/erisian.log || true)
+          # FM1_RESET_TRACE prints "chip reset at N ms (CAUSE)"; the summary repeats
+          # each reset as "chip reset at step ...", so count the trace lines only.
+          resets=$(grep -cE "^chip reset at [0-9]+ ms" work/erisian.log || true)
           if [ "$resets" -gt 1 ]; then
             echo "::error::ERISIAN reset $resets times in 4.5 s (boot loop?)"; exit 1
           fi
