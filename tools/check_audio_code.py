@@ -37,21 +37,22 @@ for name, addr in sorted(audio.items()):
 # 2. What each audio function references: disassemble the RAM code section
 # (it is a data section to the linker, so -D, not -d).
 text = run("-D", "-j", ".ram0_data")
-header = re.compile(r"^\s*([0-9a-f]+)\s+<([^>]+)>:\s*$")
-ref = re.compile(r"<([^<>:]+?)\s*:\s*([0-9a-f]+)\s*>|<([^<>+]+)(?:\+0x[0-9a-f]+)?>")
+# This objdump prints a function as a bare "name:" line, and annotates
+# references as "<symbol[+0xoff] : hexaddress >".
+header = re.compile(r"^([A-Za-z_.$][\w.$]*):\s*$")
+ref = re.compile(r"<([^<>:]+?)\s*:\s*([0-9a-f]+)\s*>")
 current, seen = None, set()
 for line in text.splitlines():
     m = header.match(line)
     if m:
-        current = m.group(2) if AUDIO.match(m.group(2)) else None
+        current = m.group(1) if AUDIO.match(m.group(1)) else None
         if current: seen.add(current)
         continue
     if not current:
         continue
-    for a_sym, a_addr, b_sym in ref.findall(line):
-        name = (a_sym or b_sym).strip()
-        addr = int(a_addr, 16) if a_addr else symbols.get(name)
-        if addr is not None and FLASH_LO <= addr < FLASH_HI:
+    for name, a_addr in ref.findall(line):
+        addr = int(a_addr, 16)
+        if FLASH_LO <= addr < FLASH_HI:
             problems.append(f"{current} references flash ({name} at 0x{addr:08x}): {line.strip()}")
 
 print(f"audio functions in the symbol table: "
