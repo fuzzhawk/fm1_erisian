@@ -11,6 +11,7 @@ Facts verified on real hardware. Each entry: date, what, and
 | SoC | JieLi AC791N / WL82, 2× pi32v2 | from public sources |
 | Flash | Puya P25Q80H, JEDEC `0x856014` | read in M-Flasher |
 | Stock firmware | V15 | confirmed by Charles |
+| fm1-core platform | boots, screen, knob, keys, buttons, audio out | verified 2026-11-17 |
 | Full flash backup | taken before first custom flash | done |
 | Bootloader | M-Flasher bootloader installed (2026-11-17); **hold REC at power-on → download mode** | verified |
 
@@ -43,3 +44,14 @@ Verified on Charles's unit (0x856014).
 Note: with the M-Flasher bootloader, REC (not OCT−) at power-on is the
 bootloader's download mode. ERISIAN's own rescue combo (OCT−) is separate and
 runs inside the firmware.
+
+### 2026-11-17 — sine example with RAM sections (CI run 10, `fm1.fwsc` sha256 b727d42c…) — WORKS
+Verified on Charles's unit (0x856014).
+- Installed with M-Flasher's firmware-update function.
+- Boots. Screen: blue band and green level bar, as drawn by `examples/sine.c`.
+- Master volume knob moves the green bar (knob ADC works; `fm1_controls.knob`).
+- Every button/key gives a tone while held (key matrix, buttons and audio output work).
+- The 7 encoders do nothing and the blue band never changes: expected, the
+  example does not use them.
+- First confirmed boot of fm1-core on hardware, after the `build.py` image fix.
+- Not yet checked: LEDs under pressed keys, exact pitch (440 Hz expected).
