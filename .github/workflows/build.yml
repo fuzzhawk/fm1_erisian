@@ -121,12 +121,21 @@ jobs:
             exit 1
           fi
 
-      - name: First instructions
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: tools
+
+      - name: Audio and screen
+        run: python3 src/tools/emu_report.py run/work/out.wav run/work/lcd_2900.bmp
+
+      - name: Resets over 8 s
         run: |
           cd run
-          ../emu/target/release/fm1-emu --fwsc ../pkg/build/fm1.fwsc --trace 400 --steps 400 \
-            > work/trace.log 2>&1 || true
-          tail -n 80 work/trace.log
+          FM1_RESET_TRACE=1 ../emu/target/release/fm1-emu --fwsc ../pkg/build/fm1.fwsc \
+            --ms 8000 --quiet > work/resets.log 2>&1 || true
+          grep -iE "reset|halt|RST_SRC|wdt|watchdog" work/resets.log | head -n 40 || true
+          echo "chip resets in 8 s: $(grep -c 'chip reset' work/resets.log || true)"
 
       - uses: actions/upload-artifact@v4
         if: always()
