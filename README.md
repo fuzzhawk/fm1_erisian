@@ -1,60 +1,52 @@
-# FM-1 Core platform
+# ERISIAN
 
-A small MIT-licensed hardware platform for the M-VAVE FM-1 synthesizer
-(JieLi AC791N / WL82, PI32v2). It is based on the FM1-open firmware, with
-the GPL-3.0 application and web code removed and the board layer rewritten.
-This tree contains no GPL-3.0 code.
+Custom firmware for the M-VAVE FM-1 pocket synth (JieLi AC791N / WL82, PI32v2).
 
-It provides the display, key matrix, encoders, LEDs, ADC controls, ALNK
-audio DMA, and a build and packaging path. The FM engine is the binary
-`sdk/lib/libfm1_engine.a` supplied by M-VAVE.
+ERISIAN is built on [fm1-core](https://github.com/rgrvmusic/fm1-core) by
+rgrvmusic, an MIT-licensed FM-1 hardware platform derived from M-VAVE's
+FM1-open. fm1-core's git history is preserved in this repository. Its original
+README is kept at [docs/FM1_CORE_README.md](docs/FM1_CORE_README.md).
 
+> **Status: groundwork.** CI currently builds fm1-core's unmodified
+> `examples/sine.c`. Nothing has been verified on hardware yet. Read
+> [docs/RECOVERY.md](docs/RECOVERY.md) and take a full flash backup before
+> flashing anything.
 
-## Status
+## How it works
 
-The platform and example application build, link and package into a `.fwsc`
-update image. Nothing has run on hardware here yet; keep a stock recovery
-image and know how to enter the bootloader before flashing.
+1. Source lives here; Claude Code edits it.
+2. GitHub Actions (`.github/workflows/build.yml`) fetches the JieLi toolchain,
+   builds the firmware, packages it as `.fwsc`, runs host tests and uploads
+   the artifacts.
+3. You download the `.fwsc` from the Actions run and flash it yourself over USB.
 
+## Building locally
+
+Needs Linux x86-64 (or Docker `linux/amd64`), Python ≥ 3.10 and the JieLi
+PI32v2 toolchain 2.5.3 (clang 4.0.1, `-mcpu=r3`).
+
+```sh
+sh tools/fetch_toolchain.sh             # into ~/.jieli, never into the repo
+export FM1_PI32_TOOLCHAIN=/path/containing/bin/clang
+python3 tools/build.py --clean --package # build/fm1.fwsc
+sh tests/run_tests.sh                    # host tests, no toolchain needed
+```
 
 ## Layout
 
-- `include/`: platform API and application hooks.
-- `platform/`: timebase, panel, display, audio, mixer, weak hooks, linker script.
-- `examples/sine.c`: example application.
-- `tools/build.py`: build driver.
-- `tools/package.py`: `.fwsc` writer.
-- `sdk/`: binary engine, libc/compiler-rt, boot resources.
-
-
-## Building
-
-You need the JieLi PI32v2 toolchain 2.5.3 (clang 4.0.1, `-mcpu=r3`) and
-Python 3.10 or newer. If the toolchain is not under `~/.jieli/toolchain`,
-set `FM1_PI32_TOOLCHAIN`.
-
-```sh
-python3 tools/build.py --clean    # build/sdk.elf, build/app.bin
-python3 tools/build.py --package  # also build/fm1.fwsc
-```
-
-Use `--app path/to/app` to build another application directory. The build
-compiles every `.c` and `.S` file directly inside it.
-
-
-## Hooks
-
-The engine calls `groove_*` functions. The platform supplies weak defaults,
-so a checkout links without an application. An application can also replace
-`fm1_app_render`, `fm1_output_mix` and the `fm1_audio_*` functions. See
-`include/fm1_app.h`.
-
+- `include/`, `platform/`, `sdk/`, `examples/`, `tools/build.py`,
+  `tools/package.py`: from fm1-core.
+- `tools/fetch_toolchain.sh`, `tools/toolchain.sha256`: toolchain download with pinned hash.
+- `tests/`: host tests (run in CI).
+- `docs/`: hardware log, recovery, changelog.
+- `app/`, `host/`: ERISIAN's own firmware and host shim (coming in later phases).
 
 ## License
 
-`platform/`, `include/`, `tools/` and `examples/` are MIT licensed; see
-[LICENSE](LICENSE). The binary SDK, boot resources and third-party
-components keep their own terms, recorded in [THIRD_PARTY.md](THIRD_PARTY.md).
-
-FM-1 and M-VAVE are trademarks of their owner. This is an independent
-project.
+ERISIAN's own code and fm1-core's `platform/`, `include/`, `tools/` and
+`examples/` are MIT ([LICENSE](LICENSE)). The binary SDK and boot resources in
+`sdk/` keep their own terms (M-VAVE engine permission, Apache-2.0 boot/update
+resources, newlib, compiler-rt, …), listed in [THIRD_PARTY.md](THIRD_PARTY.md).
+`.fwsc` packages contain Apache-2.0 JieLi/M-VAVE resources, so releases ship
+[LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt) and `THIRD_PARTY.md`.
+The JieLi toolchain is never committed or redistributed.

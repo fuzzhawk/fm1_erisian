@@ -24,3 +24,10 @@ id_ed25519
 /.codex-sinco/
 __pycache__/
 *.pyc
+
+# ERISIAN
+/.jieli/
+/toolchain/
+*.tar.xz
+*.fwsc
+/build-host/

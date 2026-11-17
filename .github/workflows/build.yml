@@ -1,0 +1,68 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache JieLi toolchain
+        id: tc-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.jieli
+          key: jieli-toolchain-${{ hashFiles('tools/toolchain.sha256') }}
+
+      - name: Fetch JieLi toolchain
+        if: steps.tc-cache.outputs.cache-hit != 'true'
+        run: sh tools/fetch_toolchain.sh
+
+      - name: Locate compiler
+        run: |
+          CLANG=$(find ~/.jieli -path '*/bin/clang' -type f | head -n1)
+          test -n "$CLANG" || { echo "clang not found"; find ~/.jieli -maxdepth 3; exit 1; }
+          echo "FM1_PI32_TOOLCHAIN=$(dirname "$(dirname "$CLANG")")" >> "$GITHUB_ENV"
+          "$CLANG" --version
+
+      - name: Build firmware
+        run: python3 tools/build.py --clean --package
+
+      - name: Package info
+        run: |
+          ls -la build/
+          (cd build && sha256sum *.fwsc *.bin | tee SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erisian-${{ github.sha }}
+          path: |
+            build/*.fwsc
+            build/*.bin
+            build/SHA256SUMS
+            LICENSE
+            THIRD_PARTY.md
+            LICENSES/Apache-2.0.txt
+          if-no-files-found: error
+
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and run host tests
+        run: sh tests/run_tests.sh
