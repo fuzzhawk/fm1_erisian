@@ -18,13 +18,22 @@ def audio(path: Path) -> tuple[int, float]:
     samples = struct.unpack(f"<{len(frames) // 2}h", frames)
     peak = max(abs(s) for s in samples)
     rms = (sum(s * s for s in samples) / len(samples)) ** 0.5
-    # Zero crossings of the left channel give a rough pitch.
+    # Rough pitch: count upward swings of the left channel through a band of
+    # +-peak/4 (hysteresis), so low-level noise near zero adds no crossings.
     left = samples[::channels]
-    crossings = sum(1 for a, b in zip(left, left[1:]) if (a < 0) != (b < 0))
+    band = max(peak // 4, 1)
+    state, cycles = 0, 0
+    for v in left:
+        if state <= 0 and v > band:
+            if state < 0:
+                cycles += 1
+            state = 1
+        elif state >= 0 and v < -band:
+            state = -1
     seconds = len(left) / rate
-    hz = crossings / 2 / seconds
+    hz = cycles / seconds
     print(f"audio: {seconds:.2f} s, peak {peak}, rms {rms:.0f}, "
-          f"~{hz:.0f} Hz by zero crossings")
+          f"~{hz:.0f} Hz")
     return peak, hz
 
 
