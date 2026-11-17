@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ERISIAN Kick Uploader</title>
+<style>
+  :root {
+    --bg: #faf8f3; --panel: #ffffff; --text: #1d1b17; --dim: #6d675c;
+    --line: #e4ded2; --accent: #b98600; --ok: #2f7d32; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111010; --panel: #1b1a18; --text: #ece7dc; --dim: #9a9387;
+            --line: #2e2b27; --accent: #ffc400; --ok: #7bc67e; --bad: #ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 28px; letter-spacing: 0.08em; margin: 0 0 4px; color: var(--accent); }
+  p.lead { margin: 0 0 24px; color: var(--dim); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 12px; color: var(--dim); }
+  label { display: block; font-size: 14px; color: var(--dim); margin-bottom: 6px; }
+  select, input[type=file] { width: 100%; font: inherit; padding: 8px; border-radius: 6px;
+            border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  button { font: inherit; padding: 10px 18px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--bg); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .info { font-variant-numeric: tabular-nums; margin-top: 10px; color: var(--dim); font-size: 14px; }
+  progress { width: 100%; height: 14px; margin-top: 12px; accent-color: var(--accent); }
+  #log { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap;
+         max-height: 220px; overflow-y: auto; color: var(--dim); margin: 0; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  ol { margin: 0; padding-left: 20px; } li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ERISIAN</h1>
+  <p class="lead">Kick uploader. Stores a 16-bit mono 44.1 kHz WAV in the FM-1's user flash over USB MIDI.</p>
+
+  <section>
+    <h2>1 · Connect</h2>
+    <ol>
+      <li>Install an ERISIAN firmware build on the FM-1 and connect it over USB.</li>
+      <li>Use Chrome or Edge. Allow MIDI (with SysEx) when the browser asks.</li>
+    </ol>
+    <div class="row">
+      <button id="connect">Connect MIDI</button>
+    </div>
+    <div class="row" style="display:block">
+      <label for="out">Send to</label>
+      <select id="out" disabled></select>
+      <label for="in" style="margin-top:8px">Listen on</label>
+      <select id="in" disabled></select>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · Choose the kick</h2>
+    <input type="file" id="file" accept=".wav,audio/wav">
+    <div class="info" id="wavinfo">No file chosen.</div>
+    <div class="row">
+      <button id="preview" disabled>Preview</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>3 · Upload</h2>
+    <div class="row">
+      <button id="upload" class="primary" disabled>Upload to FM-1</button>
+      <button id="abort" disabled>Cancel</button>
+    </div>
+    <progress id="progress" max="1" value="0"></progress>
+    <div class="info" id="status">Waiting.</div>
+  </section>
+
+  <section>
+    <h2>Log</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+/*PROTOCOL*/
+</script>
+<script>
+(() => {
+  const up = window.ErisianUpload;
+  const $ = (id) => document.getElementById(id);
+  let access = null, payloadBytes = null, pcm = null, cancelled = false, waiter = null;
+
+  function log(text, cls) {
+    const line = document.createElement("div");
+    line.textContent = text;
+    if (cls) line.className = cls;
+    $("log").appendChild(line);
+    $("log").scrollTop = $("log").scrollHeight;
+  }
+  function status(text, cls) { $("status").textContent = text; $("status").className = "info " + (cls || ""); }
+  function ready() { $("upload").disabled = !(access && payloadBytes && $("out").value && $("in").value); }
+
+  function fill(select, ports) {
+    select.innerHTML = "";
+    for (const p of ports.values()) {
+      const o = document.createElement("option");
+      o.value = p.id; o.textContent = p.name + (p.manufacturer ? " (" + p.manufacturer + ")" : "");
+      if (/fm-?1|m-?vave|erisian/i.test(p.name)) o.selected = true;
+      select.appendChild(o);
+    }
+    select.disabled = !select.options.length;
+  }
+
+  $("connect").onclick = async () => {
+    if (!navigator.requestMIDIAccess) { status("This browser has no Web MIDI. Use Chrome or Edge.", "bad"); return; }
+    try {
+      access = await navigator.requestMIDIAccess({ sysex: true });
+    } catch (e) {
+      status("MIDI access refused: " + e.message, "bad"); return;
+    }
+    const refresh = () => { fill($("out"), access.outputs); fill($("in"), access.inputs); ready(); };
+    access.onstatechange = refresh;
+    refresh();
+    log("MIDI ready: " + access.outputs.size + " outputs, " + access.inputs.size + " inputs");
+  };
+  $("out").onchange = ready; $("in").onchange = ready;
+
+  $("file").onchange = async () => {
+    payloadBytes = null; pcm = null; $("preview").disabled = true;
+    const f = $("file").files[0];
+    if (!f) { $("wavinfo").textContent = "No file chosen."; ready(); return; }
+    try {
+      const wav = up.parseWav(await f.arrayBuffer());
+      payloadBytes = up.payload(wav.pcm);
+      pcm = wav.pcm;
+      let peak = 0;
+      for (const s of pcm) peak = Math.max(peak, Math.abs(s));
+      $("wavinfo").textContent = `${f.name}: ${(pcm.length / 44100).toFixed(3)} s, ${pcm.length} frames, ` +
+        `${payloadBytes.length} bytes to store, peak ${(20 * Math.log10(Math.max(peak, 1) / 32768)).toFixed(1)} dBFS`;
+      $("wavinfo").className = "info";
+      $("preview").disabled = false;
+    } catch (e) {
+      $("wavinfo").textContent = e.message; $("wavinfo").className = "info bad";
+    }
+    ready();
+  };
+
+  $("preview").onclick = () => {
+    const ctx = new AudioContext({ sampleRate: 44100 });
+    const buf = ctx.createBuffer(1, pcm.length, 44100);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+    const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination); src.start();
+  };
+
+  function exchange(out, frame, cmd, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { waiter = null; reject(new Error("timeout")); }, timeoutMs);
+      waiter = (ack) => {
+        if (ack.cmd !== cmd) return;
+        clearTimeout(timer); waiter = null; resolve(ack);
+      };
+      out.send(frame);
+    });
+  }
+
+  async function step(out, frame, cmd, timeoutMs, what) {
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      if (cancelled) throw new Error("cancelled");
+      try {
+        const ack = await exchange(out, frame, cmd, timeoutMs);
+        if (ack.status !== 0) throw Object.assign(new Error(`${what}: ${up.STATUS[ack.status] || "status " + ack.status}`), { ack, fatal: true });
+        return ack;
+      } catch (e) {
+        if (e.fatal) throw e;
+        log(`${what}: no reply (try ${attempt} of 4)`);
+      }
+    }
+    throw new Error(`${what}: the FM-1 did not answer. Is an ERISIAN build running?`);
+  }
+
+  $("upload").onclick = async () => {
+    const out = access.outputs.get($("out").value), input = access.inputs.get($("in").value);
+    input.onmidimessage = (m) => { const ack = up.parseAck(m.data); if (ack && waiter) waiter(ack); };
+    cancelled = false;
+    $("upload").disabled = true; $("abort").disabled = false;
+    $("progress").value = 0;
+    const data = payloadBytes;
+    try {
+      status("Checking the FM-1…");
+      const hello = await step(out, up.frame(up.CMD.HELLO), up.CMD.HELLO, 1500, "Hello");
+      log(`FM-1 answers, protocol ${hello.value}`);
+      status("Preparing flash (erasing)…");
+      await step(out, up.beginFrame(0, data), up.CMD.BEGIN, 15000, "Begin");
+      const t0 = performance.now();
+      for (let offset = 0; offset < data.length; offset += up.CHUNK) {
+        const ack = await step(out, up.dataFrame(data, offset), up.CMD.DATA, 3000, `Data at ${offset}`);
+        $("progress").value = ack.value / data.length;
+        status(`Sending ${Math.round(ack.value / 1024)} of ${Math.round(data.length / 1024)} KB`);
+      }
+      status("Saving…");
+      const end = await step(out, up.frame(up.CMD.END), up.CMD.END, 5000, "Save");
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      status(`Kick stored: ${end.value} bytes in ${secs} s. Press any key on the FM-1 to hear it.`, "ok");
+      log("Done.", "ok");
+    } catch (e) {
+      try { out.send(up.frame(up.CMD.ABORT)); } catch (_) {}
+      status(e.message + ". The previous kick (if any) is unchanged.", "bad");
+      log(e.message, "bad");
+    } finally {
+      $("abort").disabled = true; ready();
+    }
+  };
+  $("abort").onclick = () => { cancelled = true; };
+})();
+</script>
+</body>
+</html>

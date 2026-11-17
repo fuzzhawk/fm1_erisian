@@ -146,8 +146,10 @@ def sha256(path: Path) -> str:
 
 def collect_sources(app_directory: Path) -> list[Path]:
     sources = sorted((ROOT / "platform").glob("*.c"))
-    sources += sorted(app_directory.glob("*.c"))
-    sources += sorted(app_directory.glob("*.S"))
+    # The whole application tree: ERISIAN keeps engine, storage and UI code
+    # in subdirectories of app/.
+    sources += sorted(app_directory.rglob("*.c"))
+    sources += sorted(app_directory.rglob("*.S"))
     return sources
 
 
@@ -225,6 +227,8 @@ def main() -> int:
     parser.add_argument("--package", action="store_true",
                         help="also create a .fwsc update image")
     parser.add_argument("--clean", action="store_true")
+    parser.add_argument("--version-string", default=None,
+                        help="defines ERISIAN_VERSION for the application")
     arguments = parser.parse_args()
 
     try:
@@ -255,12 +259,18 @@ def main() -> int:
         ]
         include_flags = [f"-I{directory}" for directory in includes]
 
+        version_flags = []
+        if arguments.version_string:
+            if not re.fullmatch(r"[A-Za-z0-9._+-]{1,24}", arguments.version_string):
+                raise BuildError("invalid --version-string")
+            version_flags = [f'-DERISIAN_VERSION="{arguments.version_string}"']
+
         sources = collect_sources(app)
         objects: list[Path] = []
         for source in sources:
             relative = source.relative_to(ROOT) if source.is_relative_to(ROOT) \
                 else source.name
-            flags = COMMON_FLAGS + include_flags
+            flags = COMMON_FLAGS + include_flags + version_flags
             flags += EXTRA_FLAGS.get(str(relative), [])
             target = objects_directory / object_name(source)
             print(f"compile {relative}")
