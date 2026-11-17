@@ -215,6 +215,7 @@ static void test_chain(void)
     CHECK(k2.voice[1].engine == DRUM_FM && k2.voice[1].choke == 2);
     CHECK(k2.voice[1].c[DC_LEVEL] == 10 && k2.voice[1].c[DC_PAN] == 11);
     CHECK(k2.voice[1].e[FM_TUNE] == 12 && k2.voice[1].e[FM_NTONE] == 22);
+    CHECK(k2.voice[1].e[FM_RATIO] == 4);   /* v1 p[6] = 16: index 16 & 15 = 0 -> 0*8+4 */
     CHECK(k2.voice[1].c[DC_FTYPE] == 0 && k2.voice[1].c[DC_BITS] == 127);
     CHECK(k2.voice[0].engine == DRUM_SAMPLE);
 }

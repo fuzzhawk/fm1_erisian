@@ -60,7 +60,7 @@ static void set_e(struct drum_voice_params *v, unsigned engine, const uint8_t *e
 void drum_voice_engine_defaults(struct drum_voice_params *v, unsigned engine)
 {
     static const uint8_t sample[] = { 64, 127 };
-    static const uint8_t fm[] = { 62, 45, 30, 15, 3, 30, 20, 0, 90, 50, 95 };
+    static const uint8_t fm[] = { 62, 45, 30, 15, 28, 30, 20, 0, 90, 50, 95 };
     static const uint8_t ks[] = { 40, 70, 0, 70, 0, 20, 20, 20 };
     static const uint8_t metal[] = { 70, 30, 110, 0, 40, 0 };
     static const uint8_t shaker[] = { 100, 40, 60, 70, 20, 115, 40 };
@@ -80,7 +80,7 @@ void drum_voice_engine_defaults(struct drum_voice_params *v, unsigned engine)
 
 void drum_voice_fm_kick(struct drum_voice_params *v)
 {
-    static const uint8_t kick[] = { 30, 70, 70, 25, 1, 10, 20, 0, 0, 10, 40 };
+    static const uint8_t kick[] = { 30, 70, 70, 25, 12, 10, 20, 0, 0, 10, 40 };
     set_e(v, DRUM_FM, kick, sizeof kick);
 }
 
@@ -88,15 +88,15 @@ void drum_kit_default(struct drum_kit *k)
 {
     memset(k, 0, sizeof *k);
     for (unsigned v = 0; v < DRUM_VOICES; v++) common_defaults(&k->voice[v]);
-    static const uint8_t snare[] = { 62, 45, 30, 15, 3, 30, 20, 0, 90, 50, 95 };
+    static const uint8_t snare[] = { 62, 45, 30, 15, 28, 30, 20, 0, 90, 50, 95 };
     static const uint8_t chh[] = { 75, 22, 112, 0, 30, 0 };
     static const uint8_t ohh[] = { 75, 62, 112, 0, 30, 0 };
     static const uint8_t ltom[] = { 34, 72, 0, 60, 0, 25, 25, 15 };
     static const uint8_t htom[] = { 46, 68, 0, 70, 0, 25, 25, 15 };
-    static const uint8_t clap[] = { 70, 30, 0, 0, 1, 0, 0, 0, 110, 35, 85 };
+    static const uint8_t clap[] = { 70, 30, 0, 0, 12, 0, 0, 0, 110, 35, 85 };
     static const uint8_t wood[] = { 70, 45, 0, 100, 0, 30, 0 };
     static const uint8_t shake[] = { 100, 38, 60, 70, 18, 115, 40 };
-    static const uint8_t fkick[] = { 24, 80, 90, 35, 0, 25, 30, 0, 0, 10, 40 };
+    static const uint8_t fkick[] = { 24, 80, 90, 35, 4, 25, 30, 0, 0, 10, 40 };
     static const uint8_t revcy[] = { 60, 70, 100, 64, 50, 32 };
     drum_voice_engine_defaults(&k->voice[0], DRUM_SAMPLE);
     set_e(&k->voice[1], DRUM_FM, snare, sizeof snare);
@@ -128,6 +128,7 @@ void drum_kit_from_v1(struct drum_kit *kit, const struct drum_kit_v1 *old)
         n->c[DC_PAN] = o->p[1];
         for (unsigned i = 0; i < 11; i++)      /* TUNE .. N.TONE */
             n->e[i] = o->p[2 + i];
+        n->e[FM_RATIO] = (uint8_t)((o->p[6] & 15u) * 8u + 4u);   /* v1 stored the ratio index */
     }
 }
 
@@ -191,7 +192,7 @@ void drums_prepare_voice(struct drums *d, const struct drum_kit *kit, unsigned v
         x.coef2 = table_decay[clamp127(e[FM_PDEC])];
         x.coef3 = table_decay[clamp127(e[FM_MDEC])];
         x.coef4 = table_decay[clamp127(e[FM_NDEC])];
-        x.ratio_q8 = table_ratio[e[FM_RATIO] & 15u];
+        x.ratio_q8 = table_ratio[clamp127(e[FM_RATIO]) * 16u / 128u];   /* 16 ratios */
         x.a = (int32_t)e[FM_MOD] * 1314;    /* modulation index up to ~8 rad */
         x.b = (int32_t)e[FM_FDBK] * 160;
         unsigned tone = clamp127(e[FM_NTONE]);

@@ -26,7 +26,7 @@
 
 #define PROJECT_KEY 0x01u
 #define PROJECT_MAGIC 0x31505245u /* "ERP1" */
-#define PROJECT_VERSION 2u
+#define PROJECT_VERSION 3u   /* 3: FM RATIO stored as 16 ranges of 0..127 */
 
 struct project_file {
     uint32_t magic;
@@ -245,9 +245,14 @@ static void project_load(void)
     if (store_state == 0 &&
         store_read(&store, PROJECT_KEY, &f, sizeof f, &got) == STORE_OK &&
         f.v2.magic == PROJECT_MAGIC) {
-        if (f.v2.version == PROJECT_VERSION && got == sizeof f.v2 && f.v2.bytes == sizeof f.v2) {
+        if ((f.v2.version == PROJECT_VERSION || f.v2.version == 2) && got == sizeof f.v2 &&
+            f.v2.bytes == sizeof f.v2) {
             pattern = f.v2.pattern;
             kit = f.v2.kit;
+            if (f.v2.version == 2)                   /* v2 stored FM RATIO as an index */
+                for (unsigned v = 0; v < DRUM_VOICES; v++)
+                    if (kit.voice[v].engine == DRUM_FM)
+                        kit.voice[v].e[FM_RATIO] = (uint8_t)((kit.voice[v].e[FM_RATIO] & 15u) * 8u + 4u);
             return;
         }
         if (f.v1.version == 1 && got == sizeof f.v1 && f.v1.bytes == sizeof f.v1) {

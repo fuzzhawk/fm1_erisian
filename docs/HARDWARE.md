@@ -115,3 +115,12 @@ Verified on Charles's unit (0x856014), twice with similar numbers:
   Policy: SAVE while playing is written on STOP; GLO + SAVE = immediate
   one-shot save (~8 blocks dropped). Uploads and any other flash writes
   should also avoid playback.
+
+### 2026-11-17 — Tier 2 drum engines (CI run 34, sha256 e9830124…) — WORKS
+Verified on Charles's unit (0x856014).
+- Engine switching works; all engine modes work.
+- A busy pattern using all the different engines runs smoothly (no CPU trouble heard).
+- Encoder layout was confusing: the 7-slot strip did not match the panel
+  (KNOB1–4 in a row above the buttons; SELECT, ALGORITHM, PRESETS grouped
+  with master volume). F.TYP looked unreachable: choice parameters needed
+  ~32 detents per choice. Fixed in the next build (pages of 4 on KNOB1–4).

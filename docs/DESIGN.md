@@ -179,8 +179,14 @@ Chords:
 - SHIFT + step key → clear step; SHIFT + voice key → clear voice's track.
 - **OCT− held at power-on → rescue mode**, checked before anything else.
 
-Encoders: pages of 7 parameters, each lined up with an encoder; EDIT steps
-through pages (Engine / Filter / Amp / Sends / Lo-fi …).
+Encoders (revised 2026-11-17 after hardware use): KNOB1–KNOB4 (the row above
+the buttons) edit the 4 parameters of the current page, drawn in the same
+order on screen. ALGORITHM scrolls pages (EDIT steps), SELECT picks the voice,
+PRESETS sets the tempo (later: preset browsing). Pages: ENGINE 1–4 (labelled
+per engine, empty ones skipped), FILTER, AMP, LO-FI, TEXTURE, TIMING. Choice
+parameters (filter type, transient, texture, exciter, material, mode, FM
+ratio) move one choice per detent. Holding a step: KNOB1 velocity, KNOB2
+probability, KNOB3 ratchet, KNOB4 on/off.
 
 ---
 
