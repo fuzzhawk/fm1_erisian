@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Drum machine: sequencer, FM and sample voices, grid UI, project save.
+- Saves during playback: background pre-erase while stopped, chunked writes.
+- CI: audio-interrupt code must stay in SRAM and never reference flash.
 - Repository groundwork: imported fm1-core with history, CI build of the
   unmodified sine example, toolchain fetch script, host test harness, docs.
 - First green CI build of the sine example (`fm1.fwsc`, image 287 808 B).

@@ -64,6 +64,7 @@ struct store {
     uint32_t next_seq;
     int read_only;            /* set when the flash chip is not recognised */
     uint8_t live[STORE_MAX_SECTORS];
+    uint8_t blank[STORE_MAX_SECTORS];   /* 0 unknown, 1 erased, 2 written */
     struct store_entry entries[STORE_MAX_KEYS];
     struct store_stream stream;
 };
@@ -93,6 +94,17 @@ void store_abort(struct store *store);
  * (e.g. loading a sample into RAM). */
 int store_locate(const struct store *store, uint16_t key, uint32_t *offset,
                  uint32_t *length);
+
+/* Background housekeeping: checks or erases ONE free sector so later saves
+ * find erased space and need no erase (the FM-1 silences audio while it
+ * erases). Returns 1 if it did something, 0 when every free sector is
+ * already erased. Never touches live data; does nothing while a stream is
+ * open. Call it when a pause in the audio does not matter (transport
+ * stopped). */
+int store_prepare(struct store *store);
+
+/* Free sectors already known to be erased. */
+unsigned store_erased_sectors(const struct store *store);
 
 /* Writes an empty tombstone record; store_read then returns STORE_NOT_FOUND. */
 int store_delete(struct store *store, uint16_t key);

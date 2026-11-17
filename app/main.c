@@ -119,16 +119,45 @@ static void apply_kit(void)
 
 /* --- project ------------------------------------------------------------- */
 
+/* Saving while the beat plays: the runtime silences audio during every
+ * flash erase and write, so a save takes a snapshot and writes it in small
+ * chunks, one per control tick, into space store_prepare() erased earlier
+ * (while stopped). The store's commit rules still apply: the old project
+ * stays valid until the new header is written. */
+#define SAVE_CHUNK 256u
+static struct project_file save_buf;
+static uint32_t save_at;
+static int saving;
+
 int project_save(void)
 {
     if (rescue || store_state != 0) return STORE_READ_ONLY;
-    static struct project_file f;
-    f.magic = PROJECT_MAGIC;
-    f.version = PROJECT_VERSION;
-    f.bytes = (uint16_t)sizeof f;
-    f.pattern = pattern;
-    f.kit = kit;
-    return store_write(&store, PROJECT_KEY, &f, sizeof f);
+    if (saving || store.stream.active) return STORE_INVALID; /* busy */
+    save_buf.magic = PROJECT_MAGIC;
+    save_buf.version = PROJECT_VERSION;
+    save_buf.bytes = (uint16_t)sizeof save_buf;
+    save_buf.pattern = pattern;
+    save_buf.kit = kit;
+    int r = store_begin(&store, PROJECT_KEY, sizeof save_buf);
+    if (r) return r;
+    save_at = 0;
+    saving = 1;
+    return STORE_OK;
+}
+
+static void save_poll(void)
+{
+    if (!saving) return;
+    uint32_t left = sizeof save_buf - save_at;
+    uint32_t n = left < SAVE_CHUNK ? left : SAVE_CHUNK;
+    int r = store_append(&store, (const uint8_t *)&save_buf + save_at, n);
+    if (r == STORE_OK) {
+        save_at += n;
+        if (save_at < sizeof save_buf) return;
+        r = store_commit(&store, store_crc32(&save_buf, sizeof save_buf, 0));
+    }
+    saving = 0;
+    drum_ui_say(r == STORE_OK ? "SAVED" : "SAVE FAILED");
 }
 
 static void project_load(void)
@@ -286,6 +315,16 @@ void groove_screen_control(void)
     handle_upload();
     if (now - last_poll < 10u) return;
     last_poll = now;
+    save_poll();
+
+    /* Erase free flash in the background, only while the beat is stopped
+     * (an erase pauses audio), so saves during playback never erase. */
+    static uint32_t last_prepare;
+    if (booted && !rescue && store_state == 0 && !saving && !store.stream.active &&
+        !audio_playing() && now - last_prepare >= 50u) {
+        last_prepare = now;
+        store_prepare(&store);
+    }
 
     /* Boot: rescue check first (OCT- held), then mount flash and load. */
     if (!booted) {

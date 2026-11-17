@@ -196,7 +196,7 @@ void drum_ui_redraw(void)
     draw_strip();
 }
 
-static void say(const char *text)
+void drum_ui_say(const char *text)
 {
     fmt_str(message, text);
     message_until = fm1_millis() + 1500u;
@@ -260,7 +260,7 @@ int drum_ui_poll(uint32_t now)
     if (buttons_down >> BTN_ENV & 1) { pads = !pads; }
     if (buttons_down >> BTN_SAVE & 1) {
         int r = project_save();
-        say(r == 0 ? "SAVED" : "SAVE FAILED");
+        drum_ui_say(r == 0 ? "SAVING..." : "SAVE FAILED");
     }
     if (buttons_down) draw_header();
 

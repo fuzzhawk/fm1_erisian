@@ -229,6 +229,11 @@ in keys mode.
   Budget *(est.)*: 32 × 12 KB patterns + kits + patches + chains + spare
   ≈ 470 KB.
 - Host tests: power cut at every write offset, bit flips, full flash, wrap.
+- Saving during playback: the runtime silences audio during flash erase and
+  write, so free sectors are erased in the background while the transport is
+  stopped (`store_prepare`), allocation prefers erased runs, and a project
+  save is written in 256-byte chunks, one per control tick. (Hardware
+  2026-11-17: a single-shot save stuttered the beat.)
 - Flash JEDEC ID must be `0x856014` or `0xB36014`; otherwise saves are refused
   with a message.
 

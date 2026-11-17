@@ -149,9 +149,53 @@ int store_read(struct store *store, uint16_t key, void *data, size_t capacity,
     return STORE_OK;
 }
 
-/* First run of n non-live sectors, searching from the cursor. */
+enum { BLANK_UNKNOWN, BLANK_YES, BLANK_NO };
+
+/* Whether a sector reads as fully erased (all 0xFF), cached. */
+static int sector_blank(struct store *store, unsigned sector)
+{
+    if (store->blank[sector] != BLANK_UNKNOWN)
+        return store->blank[sector] == BLANK_YES;
+    uint32_t chunk[64];
+    for (uint32_t at = 0; at < STORE_SECTOR_BYTES; at += sizeof chunk) {
+        if (store->flash->read(store->flash->context, sector_offset(sector) + at,
+                               chunk, sizeof chunk))
+            return 0;
+        for (unsigned i = 0; i < 64; i++)
+            if (chunk[i] != 0xFFFFFFFFu) {
+                store->blank[sector] = BLANK_NO;
+                return 0;
+            }
+    }
+    store->blank[sector] = BLANK_YES;
+    return 1;
+}
+
+static int erase_sector(struct store *store, unsigned sector)
+{
+    store->blank[sector] = BLANK_UNKNOWN; /* until it completes */
+    if (store->flash->erase(store->flash->context, sector_offset(sector)))
+        return STORE_IO;
+    store->blank[sector] = BLANK_YES;
+    return STORE_OK;
+}
+
+/* Erase whatever in [first, first+n) is not already blank. */
+static int make_blank(struct store *store, unsigned first, unsigned n)
+{
+    for (unsigned i = 0; i < n; i++)
+        if (!sector_blank(store, first + i) && erase_sector(store, first + i))
+            return STORE_IO;
+    for (unsigned i = 0; i < n; i++)
+        store->blank[first + i] = BLANK_NO; /* about to be written */
+    return STORE_OK;
+}
+
+/* First run of n non-live sectors from the cursor; a run that is already
+ * erased (by store_prepare) wins, so the write needs no erase. */
 static int allocate(struct store *store, unsigned n, unsigned *first)
 {
+    int fallback = -1;
     for (unsigned tried = 0; tried < store->sector_count; tried++) {
         unsigned start = (store->cursor + tried) % store->sector_count;
         if (start + n > store->sector_count)
@@ -159,12 +203,48 @@ static int allocate(struct store *store, unsigned n, unsigned *first)
         unsigned i = 0;
         while (i < n && !store->live[start + i])
             i++;
-        if (i == n) {
+        if (i < n)
+            continue;
+        unsigned b = 0;
+        while (b < n && store->blank[start + b] == BLANK_YES)
+            b++;
+        if (b == n) {
             *first = start;
             return STORE_OK;
         }
+        if (fallback < 0)
+            fallback = (int)start;
     }
-    return STORE_FULL;
+    if (fallback < 0)
+        return STORE_FULL;
+    *first = (unsigned)fallback;
+    return STORE_OK;
+}
+
+int store_prepare(struct store *store)
+{
+    if (store->read_only || store->stream.active)
+        return 0;
+    for (unsigned k = 0; k < store->sector_count; k++) {
+        unsigned s = (store->cursor + k) % store->sector_count;
+        if (store->live[s] || store->blank[s] == BLANK_YES)
+            continue;
+        if (store->blank[s] == BLANK_UNKNOWN) {
+            sector_blank(store, s);       /* one check per call */
+            return 1;
+        }
+        erase_sector(store, s);           /* one erase per call */
+        return 1;
+    }
+    return 0;
+}
+
+unsigned store_erased_sectors(const struct store *store)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; i < store->sector_count; i++)
+        n += !store->live[i] && store->blank[i] == BLANK_YES;
+    return n;
 }
 
 static void adopt(struct store *store, uint16_t key, uint16_t flags,
@@ -218,9 +298,8 @@ static int write_record(struct store *store, uint16_t key, uint16_t flags,
         return STORE_FULL;
 
     const struct store_flash *f = store->flash;
-    for (unsigned i = 0; i < n; i++)
-        if (f->erase(f->context, sector_offset(first + i)))
-            return STORE_IO;
+    if (make_blank(store, first, n))
+        return STORE_IO;
     if (length &&
         f->write(f->context, sector_offset(first) + STORE_HEADER_BYTES, data, length))
         return STORE_IO;
@@ -264,10 +343,8 @@ int store_begin(struct store *store, uint16_t key, uint32_t length)
     unsigned n = sectors_for(length), first;
     if (allocate(store, n, &first) != STORE_OK)
         return STORE_FULL;
-    const struct store_flash *f = store->flash;
-    for (unsigned i = 0; i < n; i++)
-        if (f->erase(f->context, sector_offset(first + i)))
-            return STORE_IO;
+    if (make_blank(store, first, n))
+        return STORE_IO;
     store->stream.key = key;
     store->stream.first_sector = (uint16_t)first;
     store->stream.sectors = (uint16_t)n;

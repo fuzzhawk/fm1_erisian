@@ -40,9 +40,10 @@ void drum_ui_init(void);
 void drum_ui_redraw(void);
 /* Handle one panel scan. Returns 1 when HOME was pressed (show status). */
 int drum_ui_poll(uint32_t now_ms);
+void drum_ui_say(const char *text);   /* short message in the header */
 
 /* --- main.c: services for the UI ----------------------------------------- */
-int project_save(void);        /* 0 ok, else a store error */
+int project_save(void);        /* 0 = save started (finishes in the background) */
 const char *status_text(void); /* short line for the header */
 
 #endif

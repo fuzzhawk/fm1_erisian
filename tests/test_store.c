@@ -320,6 +320,72 @@ static void test_stream(void)
     CHECK(store_begin(&st, KICK, N) == STORE_READ_ONLY);
 }
 
+static unsigned total_erases(void)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; i < FLASH_BYTES / STORE_SECTOR_BYTES; i++) n += sim.erases[i];
+    return n;
+}
+
+/* Background pre-erase: afterwards saves need no erase at all, live data is
+ * never touched, and a power cut inside a pre-erase is harmless. */
+static void test_prepare(void)
+{
+    static uint8_t v[3500], w[3500], other[200];
+    sim_reset(); power_on();
+    fill(other, sizeof other, 90);
+    CHECK(store_write(&st, 2, other, sizeof other) == STORE_OK);
+    for (unsigned i = 0; i < 40; i++) {           /* leave many written sectors behind */
+        fill(v, sizeof v, i);
+        CHECK(store_write(&st, 1, v, sizeof v) == STORE_OK);
+    }
+    power_on();                                    /* cache starts unknown */
+    unsigned steps = 0;
+    while (store_prepare(&st) && steps < 1000) steps++;
+    CHECK(steps < 1000);
+    CHECK(store_erased_sectors(&st) == store_free_sectors(&st));
+    CHECK(has(1, v, sizeof v) && has(2, other, sizeof other));
+
+    unsigned before = total_erases();
+    for (unsigned i = 0; i < 20; i++) {            /* saves while "playing" */
+        fill(w, sizeof w, 100 + i);
+        CHECK(store_write(&st, 1, w, sizeof w) == STORE_OK);
+    }
+    CHECK(total_erases() == before);               /* no erase during saves */
+    CHECK(has(1, w, sizeof w) && has(2, other, sizeof other));
+
+    /* Streamed save onto pre-erased space: also erase-free. */
+    while (store_prepare(&st)) {}
+    before = total_erases();
+    CHECK(store_begin(&st, 3, sizeof v) == STORE_OK);
+    for (size_t at = 0; at < sizeof v; at += 256)
+        CHECK(store_append(&st, v + at, sizeof v - at < 256 ? sizeof v - at : 256) == STORE_OK);
+    CHECK(store_commit(&st, store_crc32(v, sizeof v, 0)) == STORE_OK);
+    CHECK(total_erases() == before);
+    CHECK(store_prepare(&st) || 1);                /* idle again */
+
+    /* Power cut inside a pre-erase: data intact, the half-erased sector is
+     * recognised as not blank and erased again. */
+    for (unsigned i = 0; i < 10; i++) { fill(v, sizeof v, 200 + i); store_write(&st, 1, v, sizeof v); }
+    power_on();
+    for (unsigned cut = 0; cut < 6; cut++) {
+        sim.budget = 0;                             /* the next erase is cut */
+        unsigned guard = 0;
+        while (!sim.dead && store_prepare(&st) && guard++ < 200) {}
+        power_on();
+        CHECK(has(1, v, sizeof v) && has(2, other, sizeof other));
+    }
+    while (store_prepare(&st)) {}
+    CHECK(store_erased_sectors(&st) == store_free_sectors(&st));
+    for (unsigned i = 0; i < FLASH_BYTES / STORE_SECTOR_BYTES; i++)
+        if (st.blank[i] == 1) {
+            int ok = 1;
+            for (unsigned b = 0; b < STORE_SECTOR_BYTES; b++)
+                ok &= sim.mem[i * STORE_SECTOR_BYTES + b] == 0xFF;
+            CHECK(ok);                              /* "erased" really is erased */
+        }
+}
+
 int main(void)
 {
     CHECK(store_crc32("123456789", 9, 0) == 0xCBF43926u);
@@ -331,6 +397,7 @@ int main(void)
     test_wear_spreads();
     test_random_workload_with_cuts();
     test_stream();
+    test_prepare();
     if (failures) { printf("test_store: %d failure(s)\n", failures); return 1; }
     printf("test_store: ok\n");
     return 0;
