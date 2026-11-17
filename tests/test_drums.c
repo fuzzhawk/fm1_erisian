@@ -257,7 +257,7 @@ static void write_wav(const char *path, const int32_t *mix, unsigned frames)
     FILE *f = fopen(path, "wb");
     if (!f) return;
     uint32_t bytes = frames * 4, riff = 36 + bytes;
-    uint8_t h[40] = "RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x01\0\x02\0\x44\xac\0\0\x10\xb1\x02\0\x04\0\x10\0data";
+    uint8_t h[41] = "RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x01\0\x02\0\x44\xac\0\0\x10\xb1\x02\0\x04\0\x10\0data";
     memcpy(h + 4, &riff, 4);
     fwrite(h, 1, 40, f);
     fwrite(&bytes, 4, 1, f);
