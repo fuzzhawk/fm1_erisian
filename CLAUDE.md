@@ -15,14 +15,17 @@
   fallback to one core if core 1 faults or stalls.
 - Accept both flash JEDEC IDs: 0x856014 (Puya P25Q80H) and
   0xB36014 (UCUN UC25HQ80). Unknown ID → refuse to write, show a message.
-- Storage writes must be torn-write safe (two sectors + sequence number +
-  CRC; read the newest valid copy).
+- Storage writes must be torn-write safe: every record carries a sequence
+  number + CRC, the newest valid copy wins, and the only good copy of
+  anything is never overwritten (see docs/DESIGN.md §10).
 - Keep a rescue path at boot: check the rescue key combo
   (OCT− held at power-on) before anything else runs.
 - Every change must build in CI. Read failures from the Actions job logs.
 - Add or update host tests for engine, storage and UI logic.
 - Log anything verified on hardware in docs/HARDWARE.md, marked with the
   date and "verified on Charles's unit (0x856014)".
+
+- Follow docs/DESIGN.md for features, controls and priorities.
 
 ## Workflow
 1. Edit → push to a branch → CI builds the .fwsc and runs host tests.

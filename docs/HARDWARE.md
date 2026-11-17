@@ -15,7 +15,7 @@ Facts verified on real hardware. Each entry: date, what, and
 
 ## Unverified platform facts (from public sources / fm1-core)
 
-- Screen 240×240; audio 44.1 kHz, 256-frame blocks, 24-bit stereo in int32.
+- Screen 240×240; audio 44.1 kHz, 128-frame blocks (per `include/fm1_block.h`), 24-bit stereo in int32.
 - 1 MB external SPI flash. `tools/package.py` layout: app image, VM
   (settings) area, BT-info reserve, user reserve at the top of flash.
 - Stock firmware runs one core.
