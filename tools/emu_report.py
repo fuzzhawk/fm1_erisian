@@ -8,13 +8,13 @@ import wave
 from pathlib import Path
 
 
-def audio(path: Path) -> None:
+def audio(path: Path) -> tuple[int, float]:
     with wave.open(str(path)) as w:
         frames = w.readframes(w.getnframes())
         width, channels, rate = w.getsampwidth(), w.getnchannels(), w.getframerate()
     if width != 2 or not frames:
         print(f"audio: {path.name}: {len(frames)} bytes, sample width {width}")
-        return
+        return 0, 0.0
     samples = struct.unpack(f"<{len(frames) // 2}h", frames)
     peak = max(abs(s) for s in samples)
     rms = (sum(s * s for s in samples) / len(samples)) ** 0.5
@@ -22,8 +22,10 @@ def audio(path: Path) -> None:
     left = samples[::channels]
     crossings = sum(1 for a, b in zip(left, left[1:]) if (a < 0) != (b < 0))
     seconds = len(left) / rate
+    hz = crossings / 2 / seconds
     print(f"audio: {seconds:.2f} s, peak {peak}, rms {rms:.0f}, "
-          f"~{crossings / 2 / seconds:.0f} Hz by zero crossings")
+          f"~{hz:.0f} Hz by zero crossings")
+    return peak, hz
 
 
 def screen(path: Path, cols: int = 60, rows: int = 30) -> None:
@@ -52,11 +54,23 @@ def screen(path: Path, cols: int = 60, rows: int = 30) -> None:
     print(f"screen: {lit} of {cols * rows} sampled points lit")
 
 
-for name in sys.argv[1:]:
+# --expect-tone HZ: fail unless every WAV holds a tone near HZ (+-10 %).
+arguments = sys.argv[1:]
+expect = None
+if arguments[:1] == ["--expect-tone"]:
+    expect = float(arguments[1])
+    arguments = arguments[2:]
+status = 0
+for name in arguments:
     p = Path(name)
     if not p.exists():
         print(f"{name}: missing")
+        status = 1
     elif p.suffix == ".wav":
-        audio(p)
+        peak, hz = audio(p)
+        if expect and (peak == 0 or abs(hz - expect) > expect * 0.1):
+            print(f"audio: expected a tone near {expect:.0f} Hz")
+            status = 1
     elif p.suffix == ".bmp":
         screen(p)
+sys.exit(status)

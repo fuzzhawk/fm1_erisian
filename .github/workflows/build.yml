@@ -129,6 +129,23 @@ jobs:
       - name: Audio and screen
         run: python3 src/tools/emu_report.py run/work/out.wav run/work/lcd_2900.bmp
 
+      # The sine example sounds only while a key is held (knob = level).
+      - name: Tone with a key held
+        run: |
+          cd run
+          ../emu/target/release/fm1-emu --fwsc ../pkg/build/fm1.fwsc --ms 2500 --quiet \
+            --keys '300:pot:900,1000-2500:n7' --wav work/key.wav > work/key.log 2>&1 || true
+          tail -n 4 work/key.log
+          # Only the keyed part: the tone runs from 1.0 s to 2.5 s.
+          python3 - <<'PY'
+          import wave
+          w = wave.open("work/key.wav"); rate = w.getframerate(); n = w.getnframes()
+          total = 2.5; start = max(0, n - int((total - 1.1) * rate))
+          w.setpos(start); data = w.readframes(n - start)
+          out = wave.open("work/key_tail.wav", "wb"); out.setparams(w.getparams()); out.writeframes(data)
+          PY
+          python3 ../src/tools/emu_report.py --expect-tone 440 work/key_tail.wav
+
       - name: Resets over 8 s
         run: |
           cd run

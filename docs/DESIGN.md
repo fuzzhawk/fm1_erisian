@@ -253,12 +253,13 @@ in keys mode.
 
 | Firmware flash | KB |
 |---|---|
-| **Limit** (image must end ≥ 32 KB before the BT/user area) | **460** |
-| Runtime + M-VAVE engine + fm1-core platform + sine example (CI run 3, 2026-11-17) | **281** (`app.bin` 287 808 B; image rounds to 300) |
-| Wav kick | 80 |
-| Markov tables | ~2–4 |
-| **Left for all ERISIAN DSP, sequencer and UI code** | **~95** |
-| Git-out (stretch) | 25–40 (only if code stays small) |
+| **Limit**: image area must end ≥ 32 KB before the BT/user area (0x73000) | **460** |
+| Runtime + M-VAVE engine + fm1-core platform + sine, incl. RAM sections (CI run 10, 2026-11-17) | **376** (`app.bin` 366 300 B; image area 0x5E000) |
+| **Left for everything ERISIAN adds** | **~84** |
+| Wav kick, uncompressed | 80 → **does not fit next to the code; see open question** |
+
+Of the image, 78.5 KB is `.ram0_data` (code and data copied to SRAM at boot),
+so it also uses that much RAM.
 
 Flash is tighter than RAM probably is. Keep engines small (shared
 resonator/KS/FM cores), avoid large tables, and track image size in CI.
@@ -267,6 +268,9 @@ resonator/KS/FM cores), avoid large tables, and track image size in CI.
 
 ## 13. Open questions
 
+- **Where the 80 KB kick lives**: only ~84 KB of firmware flash is left for
+  all ERISIAN code. Options: user partition (one-time upload), lossless or
+  SEA compression, or a smaller kick.
 - Free RAM and CPU per voice (Phase 3 on hardware).
 - Whether flash reads from the audio interrupt are safe (decides wav kick
   playback).
