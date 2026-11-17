@@ -44,10 +44,7 @@ jobs:
           (cd build && sha256sum *.fwsc *.bin | tee SHA256SUMS)
 
       - name: Memory report
-        run: |
-          python3 tools/build.py --help >/dev/null
-          echo "image bytes: $(stat -c %s build/app.bin)"
-          grep -nE "^ *\.(ram0_data|ram0_bss|cache_ram|data|bss)[ .]|HEAP|_end *=" build/sdk.map | head -n 40 || true
+        run: python3 tools/mem_report.py build/sdk.map build/app.bin
 
       - uses: actions/upload-artifact@v4
         with:
