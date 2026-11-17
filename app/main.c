@@ -26,9 +26,9 @@
 #define RESCUE_WINDOW_MS 200u
 #define BUTTON_OCT_DOWN 0u
 
-/* Panel bit names from fm1-emu's model of the FM-1 (to be verified here). */
+/* Panel bit names, verified on Charles's unit 2026-11-17. */
 static const char *const button_names[14] = {
-    "OCT-", "OCT+", "FX", "SCL", "ENV", "LFO", "EDIT",
+    "OCT-", "OCT+", "FX", "SEL", "ENV", "LFO", "EDIT",
     "GLO", "HOME", "SAVE", "ARP", "SEQ", "PLAY", "REC",
 };
 static const char *const note_names[12] = {
@@ -159,10 +159,10 @@ static void kick_load(void)
 static uint32_t largest_free;
 
 /* Largest single block malloc can give right now, 1 KB resolution, at most
- * 256 KB. Each probe frees at once. */
+ * 320 KB (more than the heap). Each probe frees at once. */
 static uint32_t probe_heap(void)
 {
-    uint32_t lo = 0, hi = 256;
+    uint32_t lo = 0, hi = 320;
     while (lo < hi) {
         uint32_t mid = (lo + hi + 1) / 2;
         void *p = malloc(mid * 1024u);

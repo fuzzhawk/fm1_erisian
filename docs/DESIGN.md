@@ -176,10 +176,10 @@ through pages (Engine / Filter / Amp / Sends / Lo-fi …).
 
 ---
 
-### Panel bit map (from fm1-emu's FM-1 panel model; to verify on hardware)
-`fm1_controls.buttons` bits: 0 OCT−, 1 OCT+, 2 FX, 3 SCL ("SEL"), 4 ENV,
+### Panel bit map (verified on Charles's unit, 2026-11-17)
+`fm1_controls.buttons` bits: 0 OCT−, 1 OCT+, 2 FX, 3 SEL, 4 ENV,
 5 LFO, 6 EDIT, 7 GLO, 8 HOME, 9 SAVE, 10 ARP, 11 SEQ, 12 PLAY, 13 REC.
-`keys` bits 0..26 = F3..G5. Encoders 0 SELECT, 1 ALGO, 2–5 K1–K4, 6 PRESET.
+`keys` bits 0..26 = F3..G5. Encoders 0 SELECT, 1 ALGORITHM, 2–5 KNOB1–KNOB4, 6 PRESETS. Master volume knob = `knob`.
 LEDs: 0..13 buttons, 14..40 keys.
 
 ## 8. Screens

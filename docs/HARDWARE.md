@@ -12,6 +12,9 @@ Facts verified on real hardware. Each entry: date, what, and
 | Flash | Puya P25Q80H, JEDEC `0x856014` | read in M-Flasher |
 | Stock firmware | V15 | confirmed by Charles |
 | fm1-core platform | boots, screen, knob, keys, buttons, audio out | verified 2026-11-17 |
+| Panel map | buttons 0 OCT− 1 OCT+ 2 FX 3 SEL 4 ENV 5 LFO 6 EDIT 7 GLO 8 HOME 9 SAVE 10 ARP 11 SEQ 12 PLAY 13 REC; keys 0..26 = F3..G5; encoders 0 SELECT 1 ALGORITHM 2–5 KNOB1–4 6 PRESETS; master knob = `knob` | verified 2026-11-17 |
+| Free heap (largest block, ~3 s after boot) | ≥ 256 KB (probe was capped at 256 KB) | verified 2026-11-17 |
+| User flash via `fm1_flash_*` | mounts and writes; ERISIAN share 440 KB | verified 2026-11-17 |
 | Full flash backup | taken before first custom flash | done |
 | Bootloader | M-Flasher bootloader installed (2026-11-17); **hold REC at power-on → download mode** | verified |
 
@@ -55,3 +58,16 @@ Verified on Charles's unit (0x856014).
   example does not use them.
 - First confirmed boot of fm1-core on hardware, after the `build.py` image fix.
 - Not yet checked: LEDs under pressed keys, exact pitch (440 Hz expected).
+
+### 2026-11-17 — first ERISIAN build (CI run 18, `erisian.fwsc` sha256 5c8c8f28…) — WORKS
+Verified on Charles's unit (0x856014).
+- Boot screen with ERISIAN name and version.
+- All 14 buttons report the expected bit and name (the label is SEL, not
+  "SCL" as fm1-emu calls it; fixed in the firmware).
+- Encoders: SELECT 0, ALGORITHM 1, KNOB1 2, KNOB2 3, KNOB3 4, KNOB4 5,
+  PRESETS 6. Master knob = `fm1_controls.knob`.
+- RAM: largest free block 256 KB, the probe's cap, so at least that much.
+- FLASH OK 412K free after the kick upload (440 KB share).
+- Kick uploaded over USB with tools/uploader (Chrome/Edge Web MIDI):
+  "USB KICK SAVED", "KICK 13553 FR" (0.31 s, 16-bit mono 44.1 kHz).
+  First real use of the store, the SysEx upload and USB MIDI replies.
