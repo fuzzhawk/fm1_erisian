@@ -167,11 +167,48 @@ static int allocate(struct store *store, unsigned n, unsigned *first)
     return STORE_FULL;
 }
 
+static void adopt(struct store *store, uint16_t key, uint16_t flags,
+                  unsigned first, unsigned n, uint32_t seq, uint32_t length)
+{
+    struct store_entry *e = &store->entries[key];
+    mark(store, e, 0);
+    e->seq = seq;
+    e->first_sector = (uint16_t)first;
+    e->sectors = (uint16_t)n;
+    e->length = (flags & FLAG_TOMBSTONE) ? UINT32_MAX : length;
+    mark(store, e, 1);
+    store->next_seq++;
+    store->cursor = (first + n) % store->sector_count;
+}
+
+static int write_header(struct store *store, unsigned first, uint16_t key,
+                        uint16_t flags, uint32_t length, uint32_t data_crc)
+{
+    struct header h;
+    memset(&h, 0xFF, sizeof h);
+    h.magic = MAGIC;
+    h.key = key;
+    h.flags = flags;
+    h.seq = store->next_seq;
+    h.length = length;
+    h.data_crc = data_crc;
+    uint32_t check;
+    if (payload_crc(store, first, length, &check) || check != data_crc)
+        return STORE_IO;
+    h.header_crc = store_crc32(&h, offsetof(struct header, header_crc), 0);
+    if (store->flash->write(store->flash->context, sector_offset(first), &h,
+                            sizeof h)) /* commit */
+        return STORE_IO;
+    return STORE_OK;
+}
+
 static int write_record(struct store *store, uint16_t key, uint16_t flags,
                         const void *data, size_t length)
 {
     if (store->read_only)
         return STORE_READ_ONLY;
+    if (store->stream.active)
+        return STORE_INVALID;
     if (key >= STORE_MAX_KEYS || (length && !data) ||
         length > (size_t)store->sector_count * STORE_SECTOR_BYTES)
         return STORE_INVALID;
@@ -188,30 +225,12 @@ static int write_record(struct store *store, uint16_t key, uint16_t flags,
         f->write(f->context, sector_offset(first) + STORE_HEADER_BYTES, data, length))
         return STORE_IO;
 
-    struct header h;
-    memset(&h, 0xFF, sizeof h);
-    h.magic = MAGIC;
-    h.key = key;
-    h.flags = flags;
-    h.seq = store->next_seq;
-    h.length = (uint32_t)length;
-    h.data_crc = store_crc32(data, length, 0);
-    uint32_t check;
-    if (payload_crc(store, first, h.length, &check) || check != h.data_crc)
-        return STORE_IO;
-    h.header_crc = store_crc32(&h, offsetof(struct header, header_crc), 0);
-    if (f->write(f->context, sector_offset(first), &h, sizeof h)) /* commit */
-        return STORE_IO;
-
-    struct store_entry *e = &store->entries[key];
-    mark(store, e, 0);
-    e->seq = h.seq;
-    e->first_sector = (uint16_t)first;
-    e->sectors = (uint16_t)n;
-    e->length = (flags & FLAG_TOMBSTONE) ? UINT32_MAX : h.length;
-    mark(store, e, 1);
-    store->next_seq++;
-    store->cursor = (first + n) % store->sector_count;
+    uint32_t seq = store->next_seq;
+    int r = write_header(store, first, key, flags, (uint32_t)length,
+                         store_crc32(data, length, 0));
+    if (r)
+        return r;
+    adopt(store, key, flags, first, n, seq, (uint32_t)length);
     return STORE_OK;
 }
 
@@ -233,4 +252,85 @@ unsigned store_free_sectors(const struct store *store)
     for (unsigned i = 0; i < store->sector_count; i++)
         free_sectors += !store->live[i];
     return free_sectors;
+}
+
+int store_begin(struct store *store, uint16_t key, uint32_t length)
+{
+    if (store->read_only)
+        return STORE_READ_ONLY;
+    if (store->stream.active || key >= STORE_MAX_KEYS || length == 0 ||
+        length > (uint32_t)store->sector_count * STORE_SECTOR_BYTES)
+        return STORE_INVALID;
+    unsigned n = sectors_for(length), first;
+    if (allocate(store, n, &first) != STORE_OK)
+        return STORE_FULL;
+    const struct store_flash *f = store->flash;
+    for (unsigned i = 0; i < n; i++)
+        if (f->erase(f->context, sector_offset(first + i)))
+            return STORE_IO;
+    store->stream.key = key;
+    store->stream.first_sector = (uint16_t)first;
+    store->stream.sectors = (uint16_t)n;
+    store->stream.length = length;
+    store->stream.written = 0;
+    store->stream.crc = 0;
+    store->stream.active = 1;
+    return STORE_OK;
+}
+
+int store_append(struct store *store, const void *data, size_t bytes)
+{
+    struct store_stream *s = &store->stream;
+    if (!s->active || (bytes && !data) || bytes > s->length - s->written)
+        return STORE_INVALID;
+    if (bytes && store->flash->write(store->flash->context,
+                                     sector_offset(s->first_sector) +
+                                         STORE_HEADER_BYTES + s->written,
+                                     data, bytes)) {
+        store_abort(store);
+        return STORE_IO;
+    }
+    s->crc = store_crc32(data, bytes, s->crc);
+    s->written += (uint32_t)bytes;
+    return STORE_OK;
+}
+
+int store_commit(struct store *store, uint32_t expected_crc)
+{
+    struct store_stream *s = &store->stream;
+    if (!s->active)
+        return STORE_INVALID;
+    if (s->written != s->length || s->crc != expected_crc) {
+        store_abort(store);
+        return STORE_INVALID;
+    }
+    uint32_t seq = store->next_seq;
+    int r = write_header(store, s->first_sector, s->key, 0, s->length, s->crc);
+    s->active = 0;
+    if (r)
+        return r;
+    adopt(store, s->key, 0, s->first_sector, s->sectors, seq, s->length);
+    return STORE_OK;
+}
+
+void store_abort(struct store *store)
+{
+    /* Nothing was committed: the reserved sectors are not live and get
+     * reused by later writes. */
+    store->stream.active = 0;
+}
+
+int store_locate(const struct store *store, uint16_t key, uint32_t *offset,
+                 uint32_t *length)
+{
+    if (key >= STORE_MAX_KEYS)
+        return STORE_INVALID;
+    const struct store_entry *e = &store->entries[key];
+    if (e->sectors == 0 || e->length == UINT32_MAX)
+        return STORE_NOT_FOUND;
+    if (offset)
+        *offset = sector_offset(e->first_sector) + STORE_HEADER_BYTES;
+    if (length)
+        *length = e->length;
+    return STORE_OK;
 }

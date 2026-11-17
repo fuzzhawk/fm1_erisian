@@ -46,6 +46,17 @@ struct store_entry {
     uint32_t length;
 };
 
+/* An in-progress streamed write (store_begin / store_append / store_commit). */
+struct store_stream {
+    uint16_t key;
+    uint16_t first_sector;
+    uint16_t sectors;
+    uint8_t active;
+    uint32_t length;   /* announced total */
+    uint32_t written;  /* appended so far */
+    uint32_t crc;      /* running CRC-32 of appended bytes */
+};
+
 struct store {
     const struct store_flash *flash;
     unsigned sector_count;
@@ -54,6 +65,7 @@ struct store {
     int read_only;            /* set when the flash chip is not recognised */
     uint8_t live[STORE_MAX_SECTORS];
     struct store_entry entries[STORE_MAX_KEYS];
+    struct store_stream stream;
 };
 
 /* Scan the region and rebuild the index. read_only refuses all writes. */
@@ -65,6 +77,22 @@ int store_read(struct store *store, uint16_t key, void *data, size_t capacity,
                size_t *length);
 
 int store_write(struct store *store, uint16_t key, const void *data, size_t length);
+
+/* Streamed write of a large record (e.g. an 80 KB sample arriving over
+ * SysEx) without holding it in RAM. store_begin reserves and erases space for
+ * length bytes; store_append adds bytes in order; store_commit checks the total
+ * and CRC and writes the header, which makes the new record live. Until then
+ * the old record for key stays the valid one; a power cut or store_abort leaves
+ * it untouched. One stream at a time; other writes are refused while open. */
+int store_begin(struct store *store, uint16_t key, uint32_t length);
+int store_append(struct store *store, const void *data, size_t bytes);
+int store_commit(struct store *store, uint32_t expected_crc);
+void store_abort(struct store *store);
+
+/* Where a live record's payload sits in flash, for reading it in pieces
+ * (e.g. loading a sample into RAM). */
+int store_locate(const struct store *store, uint16_t key, uint32_t *offset,
+                 uint32_t *length);
 
 /* Writes an empty tombstone record; store_read then returns STORE_NOT_FOUND. */
 int store_delete(struct store *store, uint16_t key);

@@ -14,6 +14,14 @@ for t in "$ROOT"/tests/test_*.py; do
     python3 "$t" || fail=1
 done
 
+# The uploader page's protocol code generates frames for the C tests.
+if command -v node >/dev/null 2>&1; then
+    echo "== js/gen_frames.mjs"
+    node "$ROOT/tests/js/gen_frames.mjs" "$OUT/js_frames.bin" || fail=1
+else
+    echo "(node not found: JS uploader frames not tested)"
+fi
+
 for t in "$ROOT"/tests/test_*.c; do
     [ -e "$t" ] || continue
     name=$(basename "$t" .c)
@@ -23,7 +31,8 @@ for t in "$ROOT"/tests/test_*.c; do
     srcs=""
     for d in $deps; do srcs="$srcs $ROOT/$d"; done
     $CC -std=c99 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
-        -I"$ROOT/include" "$t" $srcs -o "$OUT/$name" && "$OUT/$name" || fail=1
+        -I"$ROOT/include" "$t" $srcs -o "$OUT/$name" && \
+        (cd "$ROOT" && "$OUT/$name" "$OUT/js_frames.bin") || fail=1
 done
 
 [ "$fail" -eq 0 ] && echo "all host tests passed" || { echo "host tests FAILED"; exit 1; }

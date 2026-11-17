@@ -92,7 +92,7 @@ static void fill(uint8_t *buf, size_t n, unsigned seed)
 
 static int has(uint16_t key, const uint8_t *expect, size_t n)
 {
-    static uint8_t buf[16384];
+    static uint8_t buf[96 * 1024];
     size_t len = 0;
     if (store_read(&st, key, buf, sizeof buf, &len) != STORE_OK) return 0;
     return len == n && memcmp(buf, expect, n) == 0;
@@ -257,6 +257,69 @@ static void test_random_workload_with_cuts(void)
     }
 }
 
+/* Stream an 80 KB "kick" in uneven chunks; replace it; cut power mid-stream. */
+static void test_stream(void)
+{
+    enum { KICK = 0xF0, N = 80 * 1024 };
+    static uint8_t a[N], b[N];
+    fill(a, N, 40); fill(b, N, 41);
+    sim_reset(); power_on();
+
+    CHECK(store_begin(&st, KICK, N) == STORE_OK);
+    CHECK(store_write(&st, 1, a, 10) == STORE_INVALID); /* busy */
+    for (size_t at = 0; at < N;) {
+        size_t n = (at * 7 + 333) % 700 + 1;
+        if (n > N - at) n = N - at;
+        CHECK(store_append(&st, a + at, n) == STORE_OK);
+        at += n;
+    }
+    CHECK(store_append(&st, a, 1) == STORE_INVALID); /* past the length */
+    CHECK(store_commit(&st, store_crc32(a, N, 0)) == STORE_OK);
+    power_on();
+    CHECK(has(KICK, a, N));
+    uint32_t off, len;
+    CHECK(store_locate(&st, KICK, &off, &len) == STORE_OK && len == N);
+    CHECK(memcmp(sim.mem + off, a, N) == 0);
+
+    /* Wrong CRC: refused, old kick stays. */
+    CHECK(store_begin(&st, KICK, N) == STORE_OK);
+    CHECK(store_append(&st, b, N) == STORE_OK);
+    CHECK(store_commit(&st, 0x12345678u) == STORE_INVALID);
+    power_on();
+    CHECK(has(KICK, a, N));
+
+    /* Short upload, then abandoned: old kick stays, other writes work again. */
+    CHECK(store_begin(&st, KICK, N) == STORE_OK);
+    CHECK(store_append(&st, b, N / 2) == STORE_OK);
+    CHECK(store_commit(&st, store_crc32(b, N, 0)) == STORE_INVALID);
+    CHECK(store_write(&st, 1, a, 10) == STORE_OK);
+    CHECK(has(KICK, a, N));
+
+    /* Power cut at many points of a replacement. */
+    static uint8_t snapshot[FLASH_BYTES];
+    power_on();
+    memcpy(snapshot, sim.mem, FLASH_BYTES);
+    unsigned saw_new = 0;
+    for (long cut = 0; cut < N + 2000; cut += 997) {
+        memcpy(sim.mem, snapshot, FLASH_BYTES);
+        power_on();
+        sim.budget = cut;
+        int ok = store_begin(&st, KICK, N) == STORE_OK;
+        for (size_t at = 0; ok && at < N; at += 512)
+            ok = store_append(&st, b + at, N - at < 512 ? N - at : 512) == STORE_OK;
+        if (ok) ok = store_commit(&st, store_crc32(b, N, 0)) == STORE_OK;
+        power_on();
+        CHECK(has(KICK, a, N) || has(KICK, b, N));
+        CHECK(has(1, a, 10));
+        saw_new += has(KICK, b, N);
+    }
+    CHECK(saw_new > 0);
+
+    /* Read-only (unknown flash chip): refused. */
+    CHECK(store_mount(&st, &flash, 1) == STORE_OK);
+    CHECK(store_begin(&st, KICK, N) == STORE_READ_ONLY);
+}
+
 int main(void)
 {
     CHECK(store_crc32("123456789", 9, 0) == 0xCBF43926u);
@@ -267,6 +330,7 @@ int main(void)
     test_full_and_read_only();
     test_wear_spreads();
     test_random_workload_with_cuts();
+    test_stream();
     if (failures) { printf("test_store: %d failure(s)\n", failures); return 1; }
     printf("test_store: ok\n");
     return 0;
