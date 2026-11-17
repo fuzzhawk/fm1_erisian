@@ -75,3 +75,13 @@ Verified on Charles's unit (0x856014).
 - Kick playback from RAM on key press; master knob sets the level.
 - Power-cycle: kick still present (KICK 13553 FR): the store survives a reboot.
 - OCT− held at power-on boots into RESCUE MODE.
+
+### 2026-11-17 — first drum machine (CI run 26, `erisian.fwsc` sha256 50c63a5a…) — WORKS
+Verified on Charles's unit (0x856014).
+- Grid, starter beat, PLAY, voices, steps and parameter pages look and sound good.
+- On-device FM voices sound close to the host demo render (`demo.wav`).
+- Uploaded kick plays on voice 1.
+- **The beat stutters during SAVE**: the runtime silences audio during flash
+  erase/write, and a save erased a sector and wrote ~3.4 KB in one go.
+  Next build: pre-erase free sectors while stopped, write saves in 256-byte
+  chunks.
