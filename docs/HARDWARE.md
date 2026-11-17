@@ -93,3 +93,14 @@ Verified on Charles's unit (0x856014).
   rendering (skipped blocks), and many small writes made it choppier.
 - Next build: save on STOP by default; GLO + SAVE forces an immediate,
   measured save (status page: duration, writes, erases, missed audio blocks).
+
+### 2026-11-17 — save cost measured (CI run 30, sha256 70850eae…)
+Verified on Charles's unit (0x856014). GLO + SAVE while playing, after
+background pre-erase:
+- LAST SAVE 24 ms, 2 writes (3.4 KB payload + 32-byte header), 0 erases.
+- Longest single operation 21 ms (the 3.4 KB write): ~6 µs per byte.
+- Audio missed 8 blocks (~23 ms): rendering stops for the whole write.
+- Overruns 0. Pre-erase works (no erase during the save).
+- SAVE while playing → "SAVE PENDING", written on STOP: OK.
+Next: try 32-byte writes started right after an audio block (~0.2 ms each,
+inside the ~2.9 ms block slack).
