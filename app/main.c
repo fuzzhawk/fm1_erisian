@@ -1,38 +1,39 @@
 /* SPDX-License-Identifier: MIT */
-/* ERISIAN, first build: boot screen, rescue check, panel diagnostics, free RAM,
- * preset store mount, kick upload over SysEx and kick playback.
+/* ERISIAN: boot, rescue check, flash store, kick upload, project save/load
+ * and the status page. The drum machine itself is in ui/drum_ui.c (control
+ * task) and audio.c (audio interrupt).
  *
- * Contexts (see include/fm1.h): groove_screen_init / groove_screen_control run
- * in the control task and may touch flash; fm1_app_sysex runs in the MIDI
- * transport and only copies the frame; fm1_app_render runs in the audio
- * interrupt from RAM and reads RAM only.
+ * Contexts (include/fm1.h): groove_screen_init / groove_screen_control run in
+ * the control task and may touch flash; fm1_app_sysex runs in the MIDI
+ * transport and only copies the frame.
  */
 #include <stdlib.h>
 #include <string.h>
 
+#include "erisian.h"
 #include "fm1.h"
 #include "fm1_app.h"
 #include "storage/store.h"
 #include "storage/upload.h"
 #include "ui/draw.h"
 
-#ifndef ERISIAN_VERSION
-#define ERISIAN_VERSION "dev"
-#endif
-
 /* ERISIAN uses user flash below stock V15's patch bank (flash 0xEA000, i.e.
  * user offset 0x6E000), so going back to V15 keeps its patches. */
 #define ERISIAN_FLASH_BYTES 0x6E000u
 #define RESCUE_WINDOW_MS 200u
 #define BUTTON_OCT_DOWN 0u
+#define BUTTON_HOME 8u
 
-/* Panel bit names, verified on Charles's unit 2026-11-17. */
-static const char *const button_names[14] = {
-    "OCT-", "OCT+", "FX", "SEL", "ENV", "LFO", "EDIT",
-    "GLO", "HOME", "SAVE", "ARP", "SEQ", "PLAY", "REC",
-};
-static const char *const note_names[12] = {
-    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+#define PROJECT_KEY 0x01u
+#define PROJECT_MAGIC 0x31505245u /* "ERP1" */
+#define PROJECT_VERSION 1u
+
+struct project_file {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t bytes;
+    struct seq_pattern pattern;
+    struct drum_kit kit;
 };
 
 /* --- flash and store ----------------------------------------------------- */
@@ -46,6 +47,9 @@ static struct store store;
 static struct upload upload;
 static int store_state = 1;    /* 1 = not mounted yet, 0 = ok, <0 = error */
 static int rescue;
+static int status_page;
+static uint32_t largest_free;
+static char upload_text[24] = "USB IDLE";
 
 /* --- SysEx mailbox (transport -> control task) --------------------------- */
 
@@ -66,64 +70,19 @@ void fm1_app_sysex(const uint8_t *message, size_t bytes)
     fm1_control_request();
 }
 
-/* --- kick in RAM, played from the audio interrupt ------------------------ */
+/* --- kick sample: flash -> RAM ------------------------------------------- */
 
-static uint8_t *kick_record;              /* sample_header + PCM, malloc'd */
-static const int16_t *volatile kick_pcm;
-static volatile uint32_t kick_frames;
-static uint32_t kick_pos = UINT32_MAX;   /* audio interrupt only */
-static volatile uint32_t kick_trigger;   /* control task counts, audio follows */
-static uint32_t kick_seen;               /* audio interrupt only */
-static volatile uint16_t level = 512;
-static int kick_state;                    /* 0 none, 1 loaded, <0 error */
-
-FM1_AUDIO_CODE int fm1_app_render(int32_t *output, unsigned frames)
-{
-    if (!output || frames != FM1_BLOCK_FRAMES)
-        return -1;
-    const int16_t *pcm = kick_pcm;
-    const uint32_t n = kick_frames;
-    const uint32_t trigger = kick_trigger;
-    if (trigger != kick_seen) { kick_seen = trigger; kick_pos = 0; }
-    uint32_t pos = kick_pos;
-    const int32_t gain = level; /* 0..1023 */
-    for (unsigned i = 0; i < frames; i++) {
-        int32_t s = 0;
-        if (pcm && pos < n)
-            s = ((int32_t)pcm[pos++] * gain) >> 2; /* 16-bit * 10-bit -> Q23 */
-        output[2 * i] = s;
-        output[2 * i + 1] = s;
-    }
-    kick_pos = pos;
-    return 0;
-}
-
-FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
-{
-    (void)output;
-}
-
-/* Wait until the audio interrupt has finished two more blocks (at most
- * ~50 ms), so no block still reads a buffer we are about to free. */
-static void wait_audio_blocks(void)
-{
-    struct fm1_audio_stats s;
-    fm1_audio_stats_read(&s);
-    const uint32_t first = s.blocks, t0 = fm1_millis();
-    do {
-        fm1_audio_stats_read(&s);
-    } while (s.blocks - first < 2u && fm1_millis() - t0 < 50u);
-}
+static uint8_t *kick_record;   /* sample_header + PCM, malloc'd */
+static uint32_t kick_frames;
+static int kick_state;         /* 0 none, 1 loaded, <0 error */
 
 static void kick_unload(void)
 {
-    if (!kick_record)
-        return;
-    kick_frames = 0;
-    kick_pcm = NULL;
-    wait_audio_blocks();
+    if (!kick_record) return;
+    audio_set_sample(NULL, 0);
     free(kick_record);
     kick_record = NULL;
+    kick_frames = 0;
 }
 
 static void kick_load(void)
@@ -137,32 +96,69 @@ static void kick_load(void)
     if (!record) { kick_state = -1; return; }
     size_t got;
     if (store_read(&store, UPLOAD_KEY(0), record, length, &got) != STORE_OK) {
-        free(record);
-        kick_state = -2;
-        return;
+        free(record); kick_state = -2; return;
     }
     struct sample_header h;
     memcpy(&h, record, sizeof h);
     if (h.magic != SAMPLE_MAGIC || (uint64_t)h.frames * 2 + sizeof h != got) {
-        free(record);
-        kick_state = -3;
-        return;
+        free(record); kick_state = -3; return;
     }
     kick_record = record;
-    kick_pcm = (const int16_t *)(const void *)(record + sizeof h);
     kick_frames = h.frames;
     kick_state = 1;
+    audio_set_sample((const int16_t *)(const void *)(record + sizeof h), h.frames);
+}
+
+/* Voice 1 plays the uploaded kick; without one it falls back to the FM kick. */
+static void apply_kit(void)
+{
+    if (kit.voice[0].engine == DRUM_SAMPLE && kick_state != 1)
+        drum_voice_fm_kick(&kit.voice[0]);
+    drums_prepare(&drums, &kit);
+}
+
+/* --- project ------------------------------------------------------------- */
+
+int project_save(void)
+{
+    if (rescue || store_state != 0) return STORE_READ_ONLY;
+    static struct project_file f;
+    f.magic = PROJECT_MAGIC;
+    f.version = PROJECT_VERSION;
+    f.bytes = (uint16_t)sizeof f;
+    f.pattern = pattern;
+    f.kit = kit;
+    return store_write(&store, PROJECT_KEY, &f, sizeof f);
+}
+
+static void project_load(void)
+{
+    static struct project_file f;
+    size_t got;
+    if (store_state == 0 &&
+        store_read(&store, PROJECT_KEY, &f, sizeof f, &got) == STORE_OK &&
+        got == sizeof f && f.magic == PROJECT_MAGIC && f.version == PROJECT_VERSION &&
+        f.bytes == sizeof f) {
+        pattern = f.pattern;
+        kit = f.kit;
+        return;
+    }
+    /* First boot: the default kit and a starter beat. */
+    seq_pattern_init(&pattern);
+    drum_kit_default(&kit);
+    static const char *const starter[4] = {
+        "x...x...x..x.x..", "....x.......x...", "x.x.x.x.x.x.x.x.", "......x.......x.",
+    };
+    for (unsigned v = 0; v < 4; v++)
+        for (unsigned s = 0; s < 16; s++)
+            pattern.voices[v].steps[s].on = starter[v][s] == 'x';
 }
 
 /* --- free RAM probe ------------------------------------------------------ */
 
-static uint32_t largest_free;
-
-/* Largest single block malloc can give right now, 1 KB resolution, at most
- * 320 KB (more than the heap). Each probe frees at once. */
 static uint32_t probe_heap(void)
 {
-    uint32_t lo = 0, hi = 320;
+    uint32_t lo = 0, hi = 320;       /* KB; more than the heap */
     while (lo < hi) {
         uint32_t mid = (lo + hi + 1) / 2;
         void *p = malloc(mid * 1024u);
@@ -171,89 +167,62 @@ static uint32_t probe_heap(void)
     return lo * 1024u;
 }
 
-/* --- screen -------------------------------------------------------------- */
+/* --- status -------------------------------------------------------------- */
 
-enum { LINE_BTN = 48, LINE_KEY = 68, LINE_ENC = 88, LINE_KNOB = 108, LINE_RAM = 128,
-       LINE_FLASH = 148, LINE_KICK = 168, LINE_USB = 188, LINE_HINT = 220 };
-
-static char upload_text[24] = "USB IDLE";
-
-static void draw_header(void)
+const char *status_text(void)
 {
+    static char t[40];
+    char *p = t;
+    if (rescue) { fmt_str(t, "RESCUE: FLASH UNTOUCHED"); return t; }
+    if (store_state < 0) { fmt_str(t, "FLASH ERROR"); return t; }
+    p = fmt_str(p, kick_state == 1 ? "KICK OK  " : "NO KICK  ");
+    fmt_str(p, upload_text);
+    return t;
+}
+
+static void draw_status_page(void)
+{
+    char t[40], *p;
     fm1_screen_fill(0, 0, FM1_SCREEN_WIDTH, FM1_SCREEN_HEIGHT, COLOR_BG);
     draw_text(8, 6, "ERISIAN", 3, COLOR_GOLD, COLOR_BG);
-    char v[32];
-    fmt_str(fmt_str(v, "V "), ERISIAN_VERSION);
-    draw_line(8, 32, v, 1, COLOR_DIM, COLOR_BG);
-}
-
-static void draw_status(void)
-{
-    char t[32], *p;
+    fmt_str(fmt_str(t, "V "), ERISIAN_VERSION);
+    draw_line(8, 32, t, 1, COLOR_DIM, COLOR_BG);
 
     p = fmt_str(t, "RAM ");
-    if (largest_free) { p = fmt_uint(p, largest_free / 1024); fmt_str(p, "K FREE"); }
-    else fmt_str(p, "...");
-    draw_line(8, LINE_RAM, t, 2, COLOR_TEXT, COLOR_BG);
-
+    if (largest_free) { p = fmt_uint(p, largest_free / 1024); fmt_str(p, "K FREE"); } else fmt_str(p, "...");
+    draw_line(8, 60, t, 2, COLOR_TEXT, COLOR_BG);
     if (rescue) {
-        draw_line(8, LINE_FLASH, "RESCUE MODE", 2, COLOR_RED, COLOR_BG);
-        draw_line(8, LINE_KICK, "FLASH UNTOUCHED", 2, COLOR_TEXT, COLOR_BG);
-    } else if (store_state == 1) {
-        draw_line(8, LINE_FLASH, "FLASH ...", 2, COLOR_TEXT, COLOR_BG);
+        draw_line(8, 84, "RESCUE MODE", 2, COLOR_RED, COLOR_BG);
     } else if (store_state < 0) {
-        p = fmt_str(t, "FLASH ERR ");
-        fmt_uint(p, (uint32_t)-store_state);
-        draw_line(8, LINE_FLASH, t, 2, COLOR_RED, COLOR_BG);
-    } else {
+        fmt_uint(fmt_str(t, "FLASH ERR "), (uint32_t)-store_state);
+        draw_line(8, 84, t, 2, COLOR_RED, COLOR_BG);
+    } else if (store_state == 0) {
         p = fmt_str(t, store.read_only ? "FLASH RO " : "FLASH OK ");
-        p = fmt_uint(p, store_free_sectors(&store) * 4);
-        fmt_str(p, "K");
-        draw_line(8, LINE_FLASH, t, 2, store.read_only ? COLOR_RED : COLOR_TEXT, COLOR_BG);
+        fmt_str(fmt_uint(p, store_free_sectors(&store) * 4), "K");
+        draw_line(8, 84, t, 2, COLOR_TEXT, COLOR_BG);
     }
-
-    if (!rescue) {
-        if (kick_state == 1) {
-            p = fmt_str(t, "KICK ");
-            p = fmt_uint(p, kick_frames);
-            fmt_str(p, " FR");
-            draw_line(8, LINE_KICK, t, 2, COLOR_GOLD, COLOR_BG);
-        } else if (kick_state == 0) {
-            draw_line(8, LINE_KICK, "KICK NONE", 2, COLOR_DIM, COLOR_BG);
-        } else {
-            p = fmt_str(t, "KICK ERR ");
-            fmt_uint(p, (uint32_t)-kick_state);
-            draw_line(8, LINE_KICK, t, 2, COLOR_RED, COLOR_BG);
-        }
+    if (kick_state == 1) {
+        fmt_str(fmt_uint(fmt_str(t, "KICK "), kick_frames), " FR");
+        draw_line(8, 108, t, 2, COLOR_GOLD, COLOR_BG);
+    } else {
+        draw_line(8, 108, kick_state ? "KICK ERROR" : "KICK NONE", 2, COLOR_DIM, COLOR_BG);
     }
-    draw_line(8, LINE_USB, upload_text, 2, COLOR_TEXT, COLOR_BG);
-    draw_line(8, LINE_HINT, "KEY: PLAY KICK  KNOB: LEVEL", 1, COLOR_DIM, COLOR_BG);
+    draw_line(8, 132, upload_text, 2, COLOR_TEXT, COLOR_BG);
+    draw_line(8, 200, "HOME: BACK TO DRUMS", 1, COLOR_DIM, COLOR_BG);
+    draw_line(8, 212, "UPLOAD KICK: ERISIAN-UPLOADER.HTML", 1, COLOR_DIM, COLOR_BG);
 }
 
-void groove_screen_init(void)
-{
-    fm1_controls_init();
-    fm1_screen_init();
-    draw_header();
-    draw_line(8, LINE_BTN, "BTN -", 2, COLOR_TEXT, COLOR_BG);
-    draw_line(8, LINE_KEY, "KEY -", 2, COLOR_TEXT, COLOR_BG);
-    draw_line(8, LINE_ENC, "ENC -", 2, COLOR_TEXT, COLOR_BG);
-    draw_line(8, LINE_KNOB, "KNOB -", 2, COLOR_TEXT, COLOR_BG);
-    draw_status();
-}
-
-/* --- control task -------------------------------------------------------- */
+/* --- upload over SysEx --------------------------------------------------- */
 
 static void handle_upload(void)
 {
-    if (reply_bytes) { /* a reply waiting for room in the MIDI queue */
+    if (reply_bytes) {
         if (fm1_midi_send_port(reply_port, reply, reply_bytes) != -2)
-            reply_bytes = 0; /* sent, or the port went away */
+            reply_bytes = 0;  /* sent, or the port went away */
         return;
     }
     size_t n = mailbox_bytes;
-    if (!n)
-        return;
+    if (!n) return;
     int ours = 0;
     if (!rescue && store_state == 0)
         ours = upload_handle(&upload, mailbox, n, reply, &reply_bytes);
@@ -273,75 +242,59 @@ static void handle_upload(void)
         fmt_str(p, "K");
     } else if (cmd == UPLOAD_END) {
         kick_load();
-        fmt_str(upload_text, kick_state == 1 ? "USB KICK SAVED" : "USB FAILED");
-        draw_status();
-        return;
+        if (kick_state == 1 && kit.voice[0].engine != DRUM_SAMPLE) {
+            kit.voice[0].engine = DRUM_SAMPLE;   /* a fresh kick goes on voice 1 */
+            kit.voice[0].p[DP_TUNE] = 64;
+            kit.voice[0].p[DP_DECAY] = 127;
+        }
+        apply_kit();
+        fmt_str(upload_text, kick_state == 1 ? "KICK SAVED" : "UPLOAD FAILED");
     } else if (cmd == UPLOAD_BEGIN) {
         fmt_str(upload_text, store.stream.active ? "USB RECEIVING" : "USB REFUSED");
-        kick_unload(); /* frees RAM for the new one; flash copy stays */
+        kick_unload();   /* RAM for the new one; the flash copy stays */
+        apply_kit();
     } else if (cmd == UPLOAD_HELLO) {
         fmt_str(upload_text, "USB UPLOADER");
     }
-    draw_line(8, LINE_USB, upload_text, 2, COLOR_TEXT, COLOR_BG);
+    if (status_page) draw_status_page();
 }
 
-static void show_buttons(uint32_t buttons)
-{
-    char t[32], *p = fmt_str(t, "BTN ");
-    unsigned shown = 0;
-    for (unsigned b = 0; b < 14 && shown < 2; b++) {
-        if (!(buttons >> b & 1)) continue;
-        p = fmt_uint(p, b);
-        p = fmt_str(p, " ");
-        p = fmt_str(p, button_names[b]);
-        p = fmt_str(p, " ");
-        shown++;
-    }
-    if (!shown) fmt_str(p, "-");
-    draw_line(8, LINE_BTN, t, 2, COLOR_TEXT, COLOR_BG);
-}
+/* --- hooks --------------------------------------------------------------- */
 
-static void show_keys(uint32_t keys)
+void groove_screen_init(void)
 {
-    char t[32], *p = fmt_str(t, "KEY ");
-    unsigned k = 0;
-    while (k < 27 && !(keys >> k & 1)) k++;
-    if (k == 27) {
-        fmt_str(p, "-");
-    } else {
-        unsigned midi = 53 + k; /* F3 */
-        p = fmt_uint(p, k);
-        p = fmt_str(p, " ");
-        p = fmt_str(p, note_names[midi % 12]);
-        fmt_uint(p, midi / 12 - 1);
-    }
-    draw_line(8, LINE_KEY, t, 2, COLOR_TEXT, COLOR_BG);
+    fm1_controls_init();
+    fm1_screen_init();
+    fm1_screen_fill(0, 0, FM1_SCREEN_WIDTH, FM1_SCREEN_HEIGHT, COLOR_BG);
+    draw_text(8, 90, "ERISIAN", 3, COLOR_GOLD, COLOR_BG);
+    char t[32];
+    fmt_str(fmt_str(t, "V "), ERISIAN_VERSION);
+    draw_line(8, 120, t, 1, COLOR_DIM, COLOR_BG);
+    drums_init(&drums);
+    seq_pattern_init(&pattern);
+    drum_kit_default(&kit);
+    apply_kit();
 }
 
 void groove_screen_control(void)
 {
-    static uint32_t start, last_read, last_keys, last_buttons, probe_at;
-    static int32_t enc_total[7];
-    static uint16_t last_knob = 0xFFFFu;
-    static int started;
+    static uint32_t start, last_poll, probe_at;
+    static int started, booted, home_was;
     const uint32_t now = fm1_millis();
     if (!started) { started = 1; start = now; probe_at = now + 3000u; }
 
     handle_upload();
-    if ((uint32_t)(now - last_read) < 20u)
-        return;
-    last_read = now;
+    if (now - last_poll < 10u) return;
+    last_poll = now;
 
-    struct fm1_controls c;
-    fm1_controls_read(&c);
-    level = c.knob;
-
-    /* Rescue check first: OCT- held at power-on skips every flash access. */
-    if (store_state == 1 && !rescue) {
-        if (c.buttons >> BUTTON_OCT_DOWN & 1) {
-            rescue = 1;
-            draw_status();
-        } else if ((uint32_t)(now - start) >= RESCUE_WINDOW_MS) {
+    /* Boot: rescue check first (OCT- held), then mount flash and load. */
+    if (!booted) {
+        struct fm1_controls c;
+        fm1_controls_read(&c);
+        if (c.buttons >> BUTTON_OCT_DOWN & 1) rescue = 1;
+        if (!rescue && now - start < RESCUE_WINDOW_MS) return;
+        booted = 1;
+        if (!rescue) {
             uint32_t size = fm1_flash_size();
             if (size > ERISIAN_FLASH_BYTES) size = ERISIAN_FLASH_BYTES;
             flash_dev.size = size / STORE_SECTOR_BYTES * STORE_SECTOR_BYTES;
@@ -351,38 +304,33 @@ void groove_screen_control(void)
                 upload_init(&upload, &store);
                 kick_load();
             }
-            draw_status();
         }
+        project_load();
+        apply_kit();
+        status_page = rescue;
+        if (status_page) draw_status_page(); else drum_ui_init();
+        return;
     }
 
     if (!largest_free && (int32_t)(now - probe_at) >= 0) {
         largest_free = probe_heap();
-        draw_status();
+        if (status_page) draw_status_page();
     }
 
-    if (c.buttons != last_buttons) { show_buttons(c.buttons); last_buttons = c.buttons; }
-    if (c.keys != last_keys) {
-        if ((c.keys & ~last_keys) && kick_frames)
-            kick_trigger++; /* any newly pressed key plays the kick */
-        show_keys(c.keys);
-        last_keys = c.keys;
+    /* HOME toggles the status page. */
+    struct fm1_controls peek;
+    if (status_page) {
+        fm1_controls_read(&peek);
+        audio_set_master(peek.knob);
+        int home = peek.buttons >> BUTTON_HOME & 1;
+        if (home && !home_was) { status_page = 0; drum_ui_redraw(); }
+        home_was = home;
+        return;
     }
-    for (unsigned e = 0; e < 7; e++) {
-        if (!c.encoders[e]) continue;
-        enc_total[e] += c.encoders[e];
-        char t[32], *p = fmt_str(t, "ENC ");
-        p = fmt_uint(p, e);
-        p = fmt_str(p, enc_total[e] < 0 ? " -" : " +");
-        fmt_uint(p, (uint32_t)(enc_total[e] < 0 ? -enc_total[e] : enc_total[e]));
-        draw_line(8, LINE_ENC, t, 2, COLOR_TEXT, COLOR_BG);
+    /* The drum UI owns the panel read (a read consumes encoder movement). */
+    if (drum_ui_poll(now)) {
+        status_page = 1;
+        home_was = 1;
+        draw_status_page();
     }
-    int knob_move = (int)c.knob - (int)last_knob;
-    if (knob_move > 8 || knob_move < -8) {
-        char t[16];
-        fmt_uint(fmt_str(t, "KNOB "), c.knob);
-        draw_line(8, LINE_KNOB, t, 2, COLOR_TEXT, COLOR_BG);
-        last_knob = c.knob;
-    }
-    for (unsigned b = 0; b < 14; b++) fm1_led_set(b, (c.buttons >> b) & 1);
-    for (unsigned k = 0; k < 27; k++) fm1_led_set(14 + k, (c.keys >> k) & 1);
 }

@@ -54,6 +54,12 @@ jobs:
           cp LICENSES/Apache-2.0.txt build/dist/
           (cd build/dist && sha256sum *.fwsc *.html | tee SHA256SUMS)
 
+      - name: Audio code stays in RAM (ERISIAN)
+        run: |
+          OBJDUMP=$(find ~/.jieli -path '*/bin/objdump' -o -path '*/bin/llvm-objdump' | grep -m1 . || true)
+          test -n "$OBJDUMP" || { echo "::error::no objdump in the toolchain"; exit 1; }
+          python3 tools/check_audio_code.py "$OBJDUMP" build/erisian/sdk.elf
+
       - name: Memory report (ERISIAN)
         run: python3 tools/mem_report.py build/erisian/sdk.map build/erisian/app.bin
 
@@ -80,6 +86,11 @@ jobs:
           python-version: "3.12"
       - name: Build and run host tests
         run: sh tests/run_tests.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-audio-${{ github.sha }}
+          path: build-host/demo.wav
 
   # Boot each package in the FM-1 emulator (joakimeriksson/fm1-emu, MIT)
   # before anyone flashes it. A halt or a repeated reset fails the build.
@@ -116,12 +127,14 @@ jobs:
         run: |
           mkdir -p run/work && cd run
           set +e
+          # Boot, then PLAY at 1.5 s: the starter beat must sound.
           FM1_RESET_TRACE=1 ../emu/target/release/fm1-emu --fwsc ../pkg/erisian.fwsc --ms 4500 \
-            --snap 4400 --keys '300:pot:700,3800-4100:F#3,4000-4200:PLAY' \
+            --snap 4400 --keys '300:pot:700,1500-1600:PLAY' \
             --wav work/erisian.wav > work/erisian.log 2>&1
           set -e
           grep -E "^(chip reset|time|lcd|wav|halt reason)" work/erisian.log || tail -n 30 work/erisian.log
-          python3 ../tools/emu_report.py work/lcd_4400.bmp work/erisian.wav
+          python3 ../tools/emu_report.py work/lcd_4400.bmp
+          python3 ../tools/emu_report.py --expect-sound work/erisian.wav || EMU_FAIL=1
           if grep -q "halt reason" work/erisian.log; then
             tail -n 60 work/erisian.log
             echo "::error::ERISIAN halted in the emulator; do not flash this build"; exit 1
@@ -131,6 +144,9 @@ jobs:
           resets=$(grep -cE "^chip reset at [0-9]+ ms" work/erisian.log || true)
           if [ "$resets" -gt 1 ]; then
             echo "::error::ERISIAN reset $resets times in 4.5 s (boot loop?)"; exit 1
+          fi
+          if [ -n "${EMU_FAIL:-}" ]; then
+            echo "::error::ERISIAN made no sound after PLAY"; exit 1
           fi
 
       # The sine example sounds only while a key is held (knob = level).

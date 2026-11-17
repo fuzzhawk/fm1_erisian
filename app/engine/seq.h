@@ -1,0 +1,92 @@
+/* SPDX-License-Identifier: MIT */
+/* ERISIAN drum sequencer core: 11 voices x 64 steps, sample-accurate.
+ *
+ * Time runs in pulses: 12 per 1/16 step at 1x speed, so every per-voice speed
+ * (2x, 1x, 3/4x, 1/2x, 1/4x) and ratchet count (1-4) lands on whole pulses.
+ * The master length (1-64 steps of 1x) sets when the pattern ends; at that
+ * point every voice restarts from its first step. Each voice also loops its
+ * own length inside the master length (polyrhythms).
+ *
+ * seq_render() is called once per audio block and reports trigger events with
+ * their frame offset inside the block, so timing does not depend on the block
+ * size. It does no allocation, I/O or float maths: safe for the audio
+ * interrupt.
+ */
+#ifndef ERISIAN_SEQ_H
+#define ERISIAN_SEQ_H
+
+#include <stdint.h>
+
+#define SEQ_VOICES 11u
+#define SEQ_STEPS 64u
+#define SEQ_PULSES_PER_STEP 12u
+#define SEQ_RATE 44100u
+#define SEQ_BPM_MIN 3000u      /* tempo in 1/100 BPM: 30.00 */
+#define SEQ_BPM_MAX 30000u     /* 300.00 */
+
+enum seq_speed { SEQ_SPEED_2X, SEQ_SPEED_1X, SEQ_SPEED_3_4X, SEQ_SPEED_1_2X,
+                 SEQ_SPEED_1_4X, SEQ_SPEED_COUNT };
+
+struct seq_step {
+    uint8_t on;
+    uint8_t velocity;      /* 1..127 */
+    uint8_t probability;   /* 0..100 %, 100 = always */
+    uint8_t ratchet;       /* 1..4 hits in the step */
+};
+
+struct seq_voice_track {
+    struct seq_step steps[SEQ_STEPS];
+    uint8_t length;        /* 1..64 steps */
+    uint8_t speed;         /* enum seq_speed */
+    uint8_t swing;         /* 50..75 %: 50 = straight */
+    uint8_t mute;
+};
+
+struct seq_pattern {
+    struct seq_voice_track voices[SEQ_VOICES];
+    uint8_t length;        /* master length, 1..64 steps of 1x */
+    uint16_t bpm100;
+};
+
+struct seq_event {
+    uint16_t frame;        /* offset in the block */
+    uint8_t voice;
+    uint8_t velocity;
+};
+
+struct seq_state {
+    uint32_t pulse;        /* 0 .. length * 12 - 1 */
+    uint32_t phase;        /* sub-pulse accumulator */
+    uint32_t random;
+    uint8_t playing;
+    uint8_t vpulse[SEQ_VOICES];          /* pulse inside the voice's step */
+    uint8_t vindex[SEQ_VOICES];          /* the voice's current step */
+    /* A swung or ratcheted hit waits here for its pulse (one per voice). */
+    uint8_t pending_left[SEQ_VOICES];   /* hits still to play in this step */
+    uint8_t pending_gap[SEQ_VOICES];    /* pulses between ratchet hits */
+    uint8_t pending_wait[SEQ_VOICES];   /* pulses until the next hit */
+    uint8_t pending_velocity[SEQ_VOICES];
+};
+
+void seq_pattern_init(struct seq_pattern *pattern);
+void seq_start(struct seq_state *state, uint32_t seed);   /* from step 1 */
+void seq_stop(struct seq_state *state);
+
+/* Pulses per step for a speed (6, 12, 16, 24, 48). */
+unsigned seq_speed_period(unsigned speed);
+
+/* Advance by frames; writes up to max_events events, returns how many. */
+unsigned seq_render(struct seq_state *state, const struct seq_pattern *pattern,
+                    unsigned frames, struct seq_event *events, unsigned max_events);
+
+/* Current 1x step (0..63) for the playhead display. */
+static inline unsigned seq_master_step(const struct seq_state *s)
+{
+    return s->pulse / SEQ_PULSES_PER_STEP;
+}
+
+/* Step index a voice is on at the current pulse. */
+unsigned seq_voice_step(const struct seq_state *state,
+                        const struct seq_pattern *pattern, unsigned voice);
+
+#endif

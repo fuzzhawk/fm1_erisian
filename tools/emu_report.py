@@ -66,9 +66,13 @@ def screen(path: Path, cols: int = 60, rows: int = 30) -> None:
 # --expect-tone HZ: fail unless every WAV holds a tone near HZ (+-10 %).
 arguments = sys.argv[1:]
 expect = None
+expect_sound = False
 if arguments[:1] == ["--expect-tone"]:
     expect = float(arguments[1])
     arguments = arguments[2:]
+elif arguments[:1] == ["--expect-sound"]:
+    expect_sound = True
+    arguments = arguments[1:]
 status = 0
 for name in arguments:
     p = Path(name)
@@ -79,6 +83,9 @@ for name in arguments:
         peak, hz = audio(p)
         if expect and (peak == 0 or abs(hz - expect) > expect * 0.1):
             print(f"audio: expected a tone near {expect:.0f} Hz")
+            status = 1
+        if expect_sound and peak < 1000:
+            print("audio: expected sound (peak >= 1000)")
             status = 1
     elif p.suffix == ".bmp":
         screen(p)
