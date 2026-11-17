@@ -1,9 +1,10 @@
-/* deps: app/ui/drum_ui.c app/ui/draw.c app/ui/font5x7.c app/engine/drums.c app/engine/seq.c app/engine/tables.c */
+/* deps: app/ui/drum_ui.c app/ui/draw.c app/ui/font5x7.c app/engine/drums.c app/engine/plock.c app/engine/seq.c app/engine/tables.c */
 /* Drum UI tests: drive the panel with scripted controls against a fake
  * screen. Checks that EDIT changes mode, ALGORITHM changes page, the grid is
  * hidden while editing, and the knobs edit what the screen shows. Writes
  * build-host/ui_*.ppm screenshots. */
 #include "../app/erisian.h"
+#include "../app/engine/plock.h"
 #include "../app/ui/draw.h"
 #include "fm1.h"
 
@@ -195,14 +196,70 @@ int main(void)
     turn(ENC_K1, 1);
     CHECK(kit.voice[0].e[FM_PDEC] == pdec + 1);    /* page 2 exists now */
 
-    /* Holding a step in an edit mode shows its settings full screen. */
-    next.keys = 1u << 2;                          /* step 2 */
+    /* Hold a step on an ENGINE page: the knobs lock parameters on it. Step 2
+     * is off; locking turns it on, and the release leaves it on. */
+    CHECK(!pattern.voices[0].steps[1].on);
+    turn(ENC_ALGORITHM, -1);                      /* back to ENGINE page 1 */
+    tune = kit.voice[0].e[E_TUNE];
+    next.keys = 1u << 2;                          /* white key 2 = step 2 */
+    scan();
+    turn(ENC_K2, 5);                              /* fast turn: +10 */
+    int locked;
+    CHECK(plock_value(&pattern, &kit, 0, 1, PLOCK_E(E_TUNE), &locked) == tune + 10 && locked);
+    CHECK(kit.voice[0].e[E_TUNE] == tune);        /* the kit is untouched */
+    int slot = plock_slot(&pattern, 0, 1);
+    CHECK(slot >= 0);
+    if (slot >= 0) CHECK(drums.locked[slot].inc != drums.derived[0].inc);   /* prepared */
+    screenshot("ui_lock");
+    next.keys = 0;
+    scan();
+    CHECK(pattern.voices[0].steps[1].on);
+
+    /* Changing the kit's tune re-prepares the locked step, which keeps its
+     * own tune. */
+    turn(ENC_K2, -1);
+    if (slot >= 0) CHECK(drums.locked[slot].inc != drums.derived[0].inc);
+
+    /* Hold + EDIT clears the step's locks (and does not change mode). */
+    next.keys = 1u << 2;
+    scan();
+    press(BTN_EDIT);
+    CHECK(plock_slot(&pattern, 0, 1) < 0);
+    next.keys = 0;
+    scan();
+    CHECK(pattern.voices[0].steps[1].on);         /* edited while held: no toggle */
+    tune = kit.voice[0].e[E_TUNE];
+    turn(ENC_K2, 1);
+    CHECK(kit.voice[0].e[E_TUNE] == tune + 1);    /* still ENGINE mode */
+
+    /* A tap turns a locked step off and drops its locks. */
+    next.keys = 1u << 2;
+    scan();
+    turn(ENC_K2, 1);
+    next.keys = 0;
+    scan();
+    CHECK(plock_slot(&pattern, 0, 1) >= 0);
+    next.keys = 1u << 2;
+    scan();
+    next.keys = 0;
+    scan();
+    CHECK(!pattern.voices[0].steps[1].on && plock_slot(&pattern, 0, 1) < 0);
+    CHECK(plock_free_slots(&pattern) == SEQ_LOCK_SLOTS);
+
+    /* Holding a step in SEQ or TIMING: VEL, PROB, RATCH, MICRO. */
+    press(BTN_EDIT);                              /* SHAPE */
+    press(BTN_EDIT);                              /* TIMING */
+    next.keys = 1u << 4;                          /* step 3 */
     scan();
     turn(ENC_K1, -10);
-    CHECK(pattern.voices[0].steps[1].velocity == 80);   /* fast turn: 2x */
+    CHECK(pattern.voices[0].steps[2].velocity == 80);   /* fast turn: 2x */
+    turn(ENC_K4, -1);
+    turn(ENC_K4, -1);
+    CHECK(pattern.voices[0].steps[2].micro == -2);
     screenshot("ui_step");
     next.keys = 0;
     scan();
+    CHECK(!pattern.voices[0].steps[2].on);        /* edited: left as it was */
 
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     printf("drum ui ok\n");

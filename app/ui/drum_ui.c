@@ -8,6 +8,7 @@
 
 #include "../erisian.h"
 #include "draw.h"
+#include "../engine/plock.h"
 #include "fm1.h"
 
 /* Panel (verified on Charles's unit). */
@@ -53,6 +54,7 @@ static unsigned mode;           /* see modes[] */
 static unsigned param_page;     /* see page_names */
 static int pads;                /* ENV: black keys also play */
 static int held_step = -1;      /* step key held: encoders edit the step */
+static int held_edited;         /* a knob moved while it was held: no toggle */
 static uint8_t drawn_head[SEQ_VOICES];
 static char message[24];
 static uint32_t message_until;
@@ -170,6 +172,49 @@ static uint8_t step_choice(uint8_t v, unsigned n, int delta)
     return (uint8_t)((unsigned)idx * 128u / n + 64u / n);
 }
 
+/* Holding a step on an ENGINE or SHAPE page: the knobs lock parameters on
+ * that step. Elsewhere a held step shows its own settings. */
+static int lock_view(void)
+{
+    return held_step >= 0 && (mode == MODE_ENGINE || mode == MODE_SHAPE);
+}
+
+static int lock_index(const struct slot *s)
+{
+    if (s->kind == PK_E && slot_present(s)) return (int)PLOCK_E(s->param);
+    if (s->kind == PK_C) return (int)PLOCK_C(s->param);
+    return -1;
+}
+
+/* Stored 0..127 value of an engine/common slot: the kit's, or the held
+ * step's lock in the lock view. */
+static unsigned slot_raw(const struct slot *s, int *locked)
+{
+    *locked = 0;
+    int li = lock_index(s);
+    if (li < 0) return 0;
+    if (lock_view())
+        return plock_value(&pattern, &kit, voice, (unsigned)held_step, (unsigned)li, locked);
+    return s->kind == PK_E ? kit.voice[voice].e[s->param] : kit.voice[voice].c[s->param];
+}
+
+/* One knob move of an engine/common value: choices step by one, a few
+ * parameters by a coarser amount. */
+static uint8_t param_step(const struct slot *s, unsigned v, int delta)
+{
+    const struct drum_voice_params *vp = &kit.voice[voice];
+    unsigned n = choices(s);
+    int dir = delta > 0 ? 1 : -1;
+    if (n) return step_choice((uint8_t)v, n, delta);
+    if (s->kind == PK_E && vp->engine == DRUM_METAL && s->param == MT_REVERSE)   /* 0 = off, 8 per step */
+        return (uint8_t)clampi(((int)v / 8 + dir) * 8, 0, 120);
+    if (s->kind == PK_E && vp->engine == DRUM_NOISE && s->param == NZ_LENGTH)    /* 2 per step */
+        return (uint8_t)clampi(((int)v / 2 + dir) * 2, 0, 127);
+    if (s->kind == PK_C && s->param == DC_BITS) return (uint8_t)clampi((int)v + dir * 11, 0, 127);
+    if (s->kind == PK_C && s->param == DC_RATE) return (uint8_t)clampi((int)v + dir * 4, 0, 127);
+    return (uint8_t)clampi((int)v + delta, 0, 127);
+}
+
 static const char *slot_name(const struct slot *s)
 {
     if (s->kind == PK_E) {
@@ -184,13 +229,13 @@ static void slot_value(const struct slot *s, char *text)
 {
     struct drum_voice_params *vp = &kit.voice[voice];
     struct seq_voice_track *t = &pattern.voices[voice];
-    unsigned v = 0;
+    int locked;
+    unsigned v = slot_raw(s, &locked);
     text[0] = 0;
     switch (s->kind) {
     case PK_NONE: return;
     case PK_E:
         if (!slot_present(s)) return;
-        v = vp->e[s->param];
         if (vp->engine == DRUM_KS && s->param == KS_EXCITE) { fmt_str(text, excite_names[v * 4 / 128]); return; }
         if (vp->engine == DRUM_OBJECT && s->param == OB_MATERIAL) { fmt_str(text, material_names[v * 5 / 128]); return; }
         if (vp->engine == DRUM_NOISE && s->param == NZ_MODE) { fmt_str(text, noise_modes[v * 3 / 128]); return; }
@@ -202,7 +247,6 @@ static void slot_value(const struct slot *s, char *text)
         }
         break;
     case PK_C:
-        v = vp->c[s->param];
         if (s->param == DC_FTYPE) { fmt_str(text, ftype_names[v * 4 / 128]); return; }
         if (s->param == DC_TRANS) { fmt_str(text, trans_names[v * 4 / 128]); return; }
         if (s->param == DC_TEXTURE) { fmt_str(text, texture_names[v * 4 / 128]); return; }
@@ -229,11 +273,13 @@ static void slot_bar(const struct slot *s, unsigned *value, unsigned *max, int *
     *value = 0; *max = 0; *bipolar = 0;
     switch (s->kind) {
     case PK_NONE: return;
-    case PK_E: if (slot_present(s)) { *value = vp->e[s->param]; *max = 127; } return;
-    case PK_C:
-        *value = vp->c[s->param]; *max = 127;
+    case PK_E: if (slot_present(s)) { int l; *value = slot_raw(s, &l); *max = 127; } return;
+    case PK_C: {
+        int l;
+        *value = slot_raw(s, &l); *max = 127;
         *bipolar = s->param == DC_PAN || s->param == DC_FENV;
         return;
+    }
     case PK_ENGINE: *value = vp->engine; *max = DRUM_ENGINES - 1; return;
     case PK_CHOKE: *value = vp->choke; *max = DRUM_CHOKE_GROUPS; return;
     case PK_LENGTH: *value = t->length; *max = SEQ_STEPS; return;
@@ -248,29 +294,22 @@ static void slot_edit(const struct slot *s, int delta)
 {
     struct drum_voice_params *vp = &kit.voice[voice];
     struct seq_voice_track *t = &pattern.voices[voice];
-    unsigned n = choices(s);
     switch (s->kind) {
     case PK_NONE: return;
     case PK_E:
         if (!slot_present(s)) return;
-        if (n) vp->e[s->param] = step_choice(vp->e[s->param], n, delta);
-        else if (vp->engine == DRUM_METAL && s->param == MT_REVERSE)   /* 0 = off, then 8 per step */
-            vp->e[s->param] = (uint8_t)clampi((vp->e[s->param] / 8 + (delta > 0 ? 1 : -1)) * 8, 0, 120);
-        else if (vp->engine == DRUM_NOISE && s->param == NZ_LENGTH)    /* 2 per step */
-            vp->e[s->param] = (uint8_t)clampi((vp->e[s->param] / 2 + (delta > 0 ? 1 : -1)) * 2, 0, 127);
-        else vp->e[s->param] = (uint8_t)clampi(vp->e[s->param] + delta, 0, 127);
+        vp->e[s->param] = param_step(s, vp->e[s->param], delta);
         break;
     case PK_C:
-        if (n) vp->c[s->param] = step_choice(vp->c[s->param], n, delta);
-        else if (s->param == DC_BITS)                                  /* about one bit per step */
-            vp->c[s->param] = (uint8_t)clampi(vp->c[s->param] + (delta > 0 ? 11 : -11), 0, 127);
-        else if (s->param == DC_RATE)
-            vp->c[s->param] = (uint8_t)clampi(vp->c[s->param] + (delta > 0 ? 4 : -4), 0, 127);
-        else vp->c[s->param] = (uint8_t)clampi(vp->c[s->param] + delta, 0, 127);
+        vp->c[s->param] = param_step(s, vp->c[s->param], delta);
         break;
     case PK_ENGINE: {
         int e = clampi(vp->engine + (delta > 0 ? 1 : -1), 0, DRUM_ENGINES - 1);
-        if (e != vp->engine) drum_voice_engine_defaults(vp, (unsigned)e);
+        if (e != vp->engine) {
+            drum_voice_engine_defaults(vp, (unsigned)e);
+            drums_prepare_voice(&drums, &kit, voice);
+            plock_clear_engine(&pattern, &kit, &drums, voice);   /* engine locks mean nothing now */
+        }
         break;
     }
     case PK_CHOKE: vp->choke = (uint8_t)clampi(vp->choke + (delta > 0 ? 1 : -1), 0, DRUM_CHOKE_GROUPS); break;
@@ -280,14 +319,31 @@ static void slot_edit(const struct slot *s, int delta)
     case PK_MUTE: t->mute = delta > 0; break;
     case PK_MASTER_LEN: pattern.length = (uint8_t)clampi(pattern.length + delta, 1, SEQ_STEPS); break;
     }
-    if (s->kind == PK_E || s->kind == PK_C || s->kind == PK_ENGINE || s->kind == PK_CHOKE)
+    if (s->kind == PK_E || s->kind == PK_C || s->kind == PK_ENGINE || s->kind == PK_CHOKE) {
         drums_prepare_voice(&drums, &kit, voice);
+        plock_prepare_voice(&pattern, &kit, &drums, voice);
+    }
+}
+
+/* Lock the slot's parameter on the held step (turning the step on). */
+static void lock_edit(const struct slot *s, int delta)
+{
+    int li = lock_index(s), locked;
+    if (li < 0) return;
+    unsigned step = (unsigned)held_step;
+    unsigned v = plock_value(&pattern, &kit, voice, step, (unsigned)li, &locked);
+    if (plock_set(&pattern, &kit, &drums, voice, step, (unsigned)li, param_step(s, v, delta)) != 0) {
+        drum_ui_say("LOCK POOL FULL");
+        return;
+    }
+    pattern.voices[voice].steps[step].on = 1;
 }
 
 static void tempo_edit(int delta)
 {
     pattern.bpm100 = (uint16_t)clampi(pattern.bpm100 + delta * 100, SEQ_BPM_MIN, SEQ_BPM_MAX);
     drums_set_tempo(&drums, &kit, pattern.bpm100);
+    plock_tempo(&pattern, &kit, &drums);
 }
 
 /* --- drawing -------------------------------------------------------------- */
@@ -312,6 +368,8 @@ static void draw_cell(unsigned v, unsigned i, int head)
     else if (st->on) c = st->velocity >= 80 ? C_ON : C_ON_SOFT;
     else c = C_OFF;
     fm1_screen_fill(GRID_X + i * CELL_W, GRID_Y + v * CELL_H, CELL_W - 2, CELL_H - 2, c);
+    if (st->lock && step < t->length)       /* locked step: a dark notch */
+        fm1_screen_fill(GRID_X + i * CELL_W + 4, GRID_Y + v * CELL_H + 3, 3, 4, COLOR_BG);
 }
 
 static void draw_row_label(unsigned v)
@@ -363,24 +421,37 @@ static void draw_field(unsigned x, unsigned y, unsigned w, const char *text, uin
 }
 
 /* The four knob slots of what is being edited: names and values. */
-static void slot_texts(unsigned k, char *name, char *value, unsigned *bar, unsigned *max, int *bipolar)
+/* Returns the value colour: gold for a locked value, dim for one the held
+ * step only follows from the kit. */
+static uint16_t slot_texts(unsigned k, char *name, char *value, unsigned *bar, unsigned *max, int *bipolar)
 {
     name[0] = value[0] = 0;
-    if (held_step >= 0) {
+    if (held_step >= 0 && !lock_view()) {
         const struct seq_step *st = &pattern.voices[voice].steps[held_step];
-        static const char *const step_names[4] = { "VEL", "PROB", "RATCH", "ON" };
+        static const char *const step_names[4] = { "VEL", "PROB", "RATCH", "MICRO" };
         fmt_str(name, step_names[k]);
         *bipolar = 0;
         if (k == 0) { fmt_uint(value, st->velocity); *bar = st->velocity; *max = 127; }
         if (k == 1) { fmt_uint(value, st->probability); *bar = st->probability; *max = 100; }
         if (k == 2) { fmt_uint(value, st->ratchet); *bar = st->ratchet - 1u; *max = 3; }
-        if (k == 3) { fmt_str(value, st->on ? "ON" : "-"); *bar = st->on; *max = 1; }
-    } else {
-        const struct slot *s = &pages[param_page][k];
-        fmt_str(name, slot_name(s));
-        slot_value(s, value);
-        slot_bar(s, bar, max, bipolar);
+        if (k == 3) {
+            int m = st->micro;
+            if (m > 0) fmt_uint(fmt_str(value, "+"), (unsigned)m);
+            else if (m < 0) fmt_uint(fmt_str(value, "-"), (unsigned)-m);
+            else fmt_str(value, "0");
+            *bar = (unsigned)(m + SEQ_MICRO_MAX); *max = 2 * SEQ_MICRO_MAX; *bipolar = 1;
+        }
+        return COLOR_TEXT;
     }
+    const struct slot *s = &pages[param_page][k];
+    fmt_str(name, slot_name(s));
+    slot_value(s, value);
+    slot_bar(s, bar, max, bipolar);
+    if (!lock_view()) return COLOR_TEXT;
+    int locked;
+    slot_raw(s, &locked);
+    if (lock_index(s) < 0) { value[0] = 0; *max = 0; }   /* not lockable */
+    return locked ? COLOR_GOLD : COLOR_DIM;
 }
 
 static void edit_title(char *out)
@@ -389,7 +460,8 @@ static void edit_title(char *out)
     p = fmt_str(p, " ");
     if (held_step >= 0) {
         p = fmt_str(p, "STEP ");
-        fmt_uint(p, (uint32_t)held_step + 1);
+        p = fmt_uint(p, (uint32_t)held_step + 1);
+        if (lock_view()) fmt_str(p, " LOCK");
     } else if (param_page < modes[MODE_ENGINE].first + modes[MODE_ENGINE].count || param_page == PAGE_QUICK) {
         fmt_str(p, drum_engine_name(kit.voice[voice].engine));   /* "SD FM  2/3" */
     } else {
@@ -436,10 +508,10 @@ static void draw_edit(void)
         char name[12], value[12];
         unsigned bar = 0, max = 0;
         int bipolar = 0;
-        slot_texts(k, name, value, &bar, &max, &bipolar);
+        uint16_t vc = slot_texts(k, name, value, &bar, &max, &bipolar);
         draw_field(k * COL_W, NAME_Y, COL_W, name, COLOR_DIM);
         draw_bar(k * COL_W, bar, max, bipolar);
-        draw_field(k * COL_W, VALUE_Y, COL_W, value, COLOR_TEXT);
+        draw_field(k * COL_W, VALUE_Y, COL_W, value, vc);
     }
 }
 
@@ -464,9 +536,9 @@ static void draw_strip(void)
         char name[12], value[12];
         unsigned bar, max;
         int bipolar;
-        slot_texts(k, name, value, &bar, &max, &bipolar);
+        uint16_t vc = slot_texts(k, name, value, &bar, &max, &bipolar);
         draw_field(k * COL_W, STRIP_Y + 12, COL_W, name, COLOR_DIM);
-        draw_field(k * COL_W, STRIP_Y + 30, COL_W, value, COLOR_TEXT);
+        draw_field(k * COL_W, STRIP_Y + 30, COL_W, value, vc);
     }
 }
 
@@ -586,7 +658,18 @@ int drum_ui_poll(uint32_t now)
     }
     if (buttons_down >> BTN_OCT_DOWN & 1) step_page(-1);
     if (buttons_down >> BTN_OCT_UP & 1) step_page(1);
-    if (buttons_down >> BTN_EDIT & 1) set_mode(mode + 1);
+    if (buttons_down >> BTN_EDIT & 1) {
+        if (held_step >= 0) {                        /* hold step + EDIT: clear its locks */
+            plock_clear_step(&pattern, voice, (unsigned)held_step);
+            held_edited = 1;
+            draw_cell(voice, (unsigned)held_step % 16, 0);
+            drawn_head[voice] = 0xFF;
+            drum_ui_say("LOCKS CLEARED");
+            strip_dirty = 1;
+        } else {
+            set_mode(mode + 1);
+        }
+    }
     if (buttons_down >> BTN_ENV & 1) { pads = !pads; }
     if (buttons_down >> BTN_SAVE & 1) {
         if (project_save(glo) != 0) drum_ui_say("SAVE FAILED");
@@ -607,19 +690,29 @@ int drum_ui_poll(uint32_t now)
         }
     }
 
-    /* White keys: tap toggles a step; hold one and turn encoders to edit it. */
-    int held = -1;
+    /* White keys: a tap toggles the step when the key comes up. Holding one
+     * and turning knobs edits the step (or locks parameters on it) instead;
+     * then the release leaves it as it is. Turning a step off drops its
+     * locks. */
+    const uint32_t keys_up = last_keys & ~c.keys;
     for (unsigned i = 0; i < 16; i++) {
         unsigned step = page * 16 + i;
         if (keys_down >> white_keys[i] & 1) {
-            struct seq_step *st = &pattern.voices[voice].steps[step];
-            st->on = !st->on;
-            draw_cell(voice, i, 0);
-            drawn_head[voice] = 0xFF;
+            held_step = (int)step;
+            held_edited = 0;
+            strip_dirty = 1;
         }
-        if (c.keys >> white_keys[i] & 1) held = (int)step;
+        if (keys_up >> white_keys[i] & 1) {
+            if (!((int)step == held_step && held_edited)) {
+                struct seq_step *st = &pattern.voices[voice].steps[step];
+                st->on = !st->on;
+                if (!st->on) plock_clear_step(&pattern, voice, step);
+                draw_cell(voice, i, 0);
+                drawn_head[voice] = 0xFF;
+            }
+            if ((int)step == held_step) { held_step = -1; strip_dirty = 1; }
+        }
     }
-    if (held != held_step) { held_step = held; strip_dirty = 1; }
 
     /* Encoders. KNOB1..KNOB4: the page's four parameters (or the held
      * step's). SELECT: voice. ALGORITHM: page of the mode (SEQ: pattern
@@ -645,10 +738,16 @@ int drum_ui_poll(uint32_t now)
             unsigned k = e - ENC_K1;                 /* 0..3 */
             if (held_step >= 0) {
                 struct seq_step *st = &pattern.voices[voice].steps[held_step];
-                if (k == 0) st->velocity = (uint8_t)clampi(st->velocity + d, 1, 127);
-                if (k == 1) st->probability = (uint8_t)clampi(st->probability + d, 0, 100);
-                if (k == 2) st->ratchet = (uint8_t)clampi(st->ratchet + (d > 0 ? 1 : -1), 1, 4);
-                if (k == 3) st->on = d > 0;
+                held_edited = 1;
+                if (lock_view()) {
+                    lock_edit(&pages[param_page][k], d);
+                } else {
+                    if (k == 0) st->velocity = (uint8_t)clampi(st->velocity + d, 1, 127);
+                    if (k == 1) st->probability = (uint8_t)clampi(st->probability + d, 0, 100);
+                    if (k == 2) st->ratchet = (uint8_t)clampi(st->ratchet + (d > 0 ? 1 : -1), 1, 4);
+                    if (k == 3) st->micro = (int8_t)clampi(st->micro + (d > 0 ? 1 : -1),
+                                                           -SEQ_MICRO_MAX, SEQ_MICRO_MAX);
+                }
                 draw_cell(voice, (unsigned)held_step % 16, 0);
                 drawn_head[voice] = 0xFF;
             } else {

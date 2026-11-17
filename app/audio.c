@@ -75,8 +75,11 @@ FM1_AUDIO_CODE int fm1_app_render(int32_t *out, unsigned frames)
         seq.pulse = 0;
         seq.phase = 44100u * 60u * 100u; /* first pulse due at once */
         volatile uint8_t *vp = seq.vpulse, *vi = seq.vindex, *pl = seq.pending_left;
-        for (unsigned v = 0; v < SEQ_VOICES; v++)
+        volatile uint8_t *early = seq.early_step;
+        for (unsigned v = 0; v < SEQ_VOICES; v++) {
             vp[v] = vi[v] = pl[v] = 0;
+            early[v] = 0xFF;
+        }
         if (!seq.random) seq.random = 0x23F00DD5u;
         seq.playing = 1;
     }
@@ -87,6 +90,7 @@ FM1_AUDIO_CODE int fm1_app_render(int32_t *out, unsigned frames)
         ev[n].frame = 0;
         ev[n].voice = pad_voice[pad_tail % PAD_QUEUE];
         ev[n].velocity = pad_velocity[pad_tail % PAD_QUEUE];
+        ev[n].lock = 0;
         n++;
         pad_tail++;
     }

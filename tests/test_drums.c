@@ -63,7 +63,7 @@ static void setup(void)
     drums_prepare(&d, &kit);
 }
 
-static struct seq_event hit(unsigned v) { return (struct seq_event){ 0, (uint8_t)v, 127 }; }
+static struct seq_event hit(unsigned v) { return (struct seq_event){ 0, (uint8_t)v, 127, 0 }; }
 
 /* Every engine with its defaults: audible, within range, and it ends. */
 static void test_every_engine(void)
@@ -223,16 +223,16 @@ static void test_chain(void)
 static void test_choke_timing(void)
 {
     setup();
-    struct seq_event e = { 300, 1, 127 };
+    struct seq_event e = { 300, 1, 127, 0 };
     render(1000, &e, 1);
     CHECK(peak(0, 300) == 0);
     CHECK(peak(300, 310) > 0);
-    struct seq_event two[2] = { { 0, 3, 127 }, { 2000, 2, 127 } };
+    struct seq_event two[2] = { { 0, 3, 127, 0 }, { 2000, 2, 127, 0 } };
     setup();
     render(4000, two, 2);
     CHECK(!d.voice[3].active);
     setup();
-    struct seq_event open_only = { 0, 3, 127 };
+    struct seq_event open_only = { 0, 3, 127, 0 };
     render(4000, &open_only, 1);
     CHECK(d.voice[3].active);
     /* Sample removed while ringing: stops instead of reading NULL. */

@@ -114,6 +114,7 @@ struct drum_derived {
 
 struct drum_voice_state {
     uint8_t active;
+    const struct drum_derived *x;   /* what this hit plays: kit or locked step */
     uint16_t fade;           /* choke fade-out, frames left */
     uint32_t phase[6];
     int32_t s0, s1, s2, s3;  /* engine filter/feedback state */
@@ -140,6 +141,8 @@ struct drum_sample {
 
 struct drums {
     struct drum_derived derived[DRUM_VOICES];
+    /* Parameter-locked steps, prepared by plock.c (slot = seq lock slot). */
+    struct drum_derived locked[SEQ_LOCK_SLOTS];
     struct drum_voice_state voice[DRUM_VOICES];
     int16_t ks[DRUM_VOICES][DRUM_KS_LEN];
     struct drum_sample sample;   /* slot 0: the uploaded kick */
@@ -156,14 +159,18 @@ void drums_init(struct drums *d);
 void drums_set_tempo(struct drums *d, const struct drum_kit *kit, unsigned bpm100);
 void drums_prepare(struct drums *d, const struct drum_kit *kit);   /* control task */
 void drums_prepare_voice(struct drums *d, const struct drum_kit *kit, unsigned v);
+/* Prepare any parameter set into out (used for parameter-locked steps). */
+void drums_prepare_params(const struct drums *d, const struct drum_voice_params *p,
+                          struct drum_derived *out);
 
 /* Render frames into out (interleaved stereo Q23, added to what is there),
  * triggering events at their frame offsets. Audio interrupt. */
 void drums_render(struct drums *d, int32_t *out, unsigned frames,
                   const struct seq_event *events, unsigned n_events);
 
-/* Start a voice now. Audio interrupt only (live pads go through a queue the
+/* Start a voice now, with the kit's sound (lock 0) or a locked step's
+ * (lock slot + 1). Audio interrupt only (live pads go through a queue the
  * audio code drains, see app/audio.c). */
-void drums_trigger(struct drums *d, unsigned voice, unsigned velocity);
+void drums_trigger(struct drums *d, unsigned voice, unsigned velocity, unsigned lock);
 
 #endif

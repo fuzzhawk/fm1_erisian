@@ -9,7 +9,7 @@
 static int failures;
 #define CHECK(c) do { if (!(c)) { failures++; fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
 
-struct hit { uint32_t frame; uint8_t voice, velocity; };
+struct hit { uint32_t frame; uint8_t voice, velocity, lock; };
 static struct hit hits[20000];
 static unsigned nhits;
 
@@ -24,7 +24,7 @@ static void run(const struct seq_pattern *p, uint32_t total, unsigned block, uin
         unsigned n = total - at < block ? total - at : block;
         unsigned k = seq_render(&s, p, n, ev, 64);
         for (unsigned i = 0; i < k && nhits < 20000; i++)
-            hits[nhits++] = (struct hit){ at + ev[i].frame, ev[i].voice, ev[i].velocity };
+            hits[nhits++] = (struct hit){ at + ev[i].frame, ev[i].voice, ev[i].velocity, ev[i].lock };
     }
 }
 
@@ -163,12 +163,97 @@ static void test_stop(void)
     CHECK(seq_render(&s, &p, 100000, ev, 8) == 0);
 }
 
+static void test_micro_and_locks(void)
+{
+    struct seq_pattern p;
+    const double st = step_frames(12000);
+
+    /* Late: +3 twelfths = a quarter step. */
+    seq_pattern_init(&p);
+    p.voices[0].steps[0].on = p.voices[0].steps[4].on = 1;
+    p.voices[0].steps[4].micro = 3;
+    run(&p, (uint32_t)(8 * st), 128, 1);
+    CHECK(nhits == 2 && fabs(hits[1].frame - 4.25 * st) <= 1.0);
+
+    /* Early: -6 = half a step before, fired from the step before. */
+    p.voices[0].steps[4].micro = -6;
+    run(&p, (uint32_t)(8 * st), 128, 1);
+    CHECK(nhits == 2 && fabs(hits[1].frame - 3.5 * st) <= 1.0);
+    /* ...also when the step before is the voice's last step at 1/2 speed. */
+    p.voices[0].speed = SEQ_SPEED_1_2X;
+    run(&p, (uint32_t)(10 * st), 128, 1);
+    CHECK(nhits == 2 && fabs(hits[1].frame - 7.0 * st) <= 1.0);   /* step 4 at 8 st, -1 st */
+    p.voices[0].speed = SEQ_SPEED_1X;
+
+    /* Early on step 1 of the pattern: on time right after PLAY, early on
+     * every later loop (from the end of the last step). */
+    seq_pattern_init(&p);
+    p.voices[1].steps[0].on = 1;
+    p.voices[1].steps[0].micro = -3;
+    run(&p, (uint32_t)(40 * st), 128, 1);
+    CHECK(nhits == 3);
+    if (nhits == 3) {
+        CHECK(hits[0].frame == 0);
+        CHECK(fabs(hits[1].frame - 15.75 * st) <= 1.0);
+        CHECK(fabs(hits[2].frame - 31.75 * st) <= 1.0);
+    }
+
+    /* Swing and micro add: 75 % swing (+half step) and -3 (-quarter). */
+    seq_pattern_init(&p);
+    p.voices[2].swing = 75;
+    p.voices[2].steps[1].on = 1;
+    p.voices[2].steps[1].micro = -3;
+    run(&p, (uint32_t)(4 * st), 128, 1);
+    CHECK(nhits == 1 && fabs(hits[0].frame - 1.25 * st) <= 1.0);
+
+    /* Block size does not change micro-timing. */
+    seq_pattern_init(&p);
+    for (unsigned i = 0; i < 16; i++) {
+        p.voices[3].steps[i].on = 1;
+        p.voices[3].steps[i].micro = (int8_t)((int)(i % 13) - 6);
+    }
+    run(&p, (uint32_t)(40 * st), 128, 1);
+    static struct hit a[20000];
+    unsigned na = nhits;
+    memcpy(a, hits, sizeof a);
+    CHECK(na > 30);
+    run(&p, (uint32_t)(40 * st), 37, 1);
+    CHECK(nhits == na);
+    for (unsigned k = 0; k < na && k < nhits; k++) CHECK(hits[k].frame == a[k].frame);
+
+    /* The lock slot rides along with every hit of the step. */
+    seq_pattern_init(&p);
+    p.voices[4].steps[2].on = 1;
+    p.voices[4].steps[2].ratchet = 2;
+    p.voices[4].steps[2].lock = 5;
+    p.voices[4].steps[3].on = 1;
+    run(&p, (uint32_t)(4 * st), 128, 1);
+    CHECK(nhits == 3);
+    if (nhits == 3) CHECK(hits[0].lock == 5 && hits[1].lock == 5 && hits[2].lock == 0);
+
+    /* Old saves convert: fields kept, no micro, no locks. */
+    static struct seq_pattern_v3 old;
+    memset(&old, 0, sizeof old);
+    old.length = 32;
+    old.bpm100 = 9000;
+    old.voices[5].length = 12;
+    old.voices[5].swing = 60;
+    old.voices[5].steps[7] = (struct seq_step_v3){ 1, 90, 50, 3 };
+    seq_pattern_from_v3(&p, &old);
+    CHECK(p.length == 32 && p.bpm100 == 9000 && p.voices[5].length == 12 && p.voices[5].swing == 60);
+    CHECK(p.voices[5].steps[7].on == 1 && p.voices[5].steps[7].velocity == 90);
+    CHECK(p.voices[5].steps[7].probability == 50 && p.voices[5].steps[7].ratchet == 3);
+    CHECK(p.voices[5].steps[7].micro == 0 && p.voices[5].steps[7].lock == 0);
+    for (unsigned i = 0; i < SEQ_LOCK_SLOTS; i++) CHECK(p.locks[i].voice == SEQ_UNLOCKED);
+}
+
 int main(void)
 {
     test_timing();
     test_lengths_and_speed();
     test_swing_ratchet_probability();
     test_stop();
+    test_micro_and_locks();
     if (failures) { printf("test_seq: %d failure(s)\n", failures); return 1; }
     printf("test_seq: ok\n");
     return 0;

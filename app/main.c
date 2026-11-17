@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "erisian.h"
+#include "engine/plock.h"
 #include "fm1.h"
 #include "fm1_app.h"
 #include "storage/store.h"
@@ -26,7 +27,7 @@
 
 #define PROJECT_KEY 0x01u
 #define PROJECT_MAGIC 0x31505245u /* "ERP1" */
-#define PROJECT_VERSION 3u   /* 3: FM RATIO stored as 16 ranges of 0..127 */
+#define PROJECT_VERSION 4u   /* 4: micro-timing and parameter locks */
 
 struct project_file {
     uint32_t magic;
@@ -36,12 +37,22 @@ struct project_file {
     struct drum_kit kit;
 };
 
-/* Version 1 (before the engine refactor): same pattern, old kit layout. */
+/* Versions 2 and 3: the pattern before micro-timing and locks (3 stores FM
+ * RATIO as 16 ranges of 0..127, 2 as an index). */
+struct project_file_v3 {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t bytes;
+    struct seq_pattern_v3 pattern;
+    struct drum_kit kit;
+};
+
+/* Version 1 (before the engine refactor): old pattern, old kit layout. */
 struct project_file_v1 {
     uint32_t magic;
     uint16_t version;
     uint16_t bytes;
-    struct seq_pattern pattern;
+    struct seq_pattern_v3 pattern;
     struct drum_kit_v1 kit;
 };
 
@@ -149,6 +160,7 @@ static void apply_kit(void)
         drum_voice_fm_kick(&kit.voice[0]);
     drums_set_tempo(&drums, &kit, pattern.bpm100);
     drums_prepare(&drums, &kit);
+    plock_prepare_all(&pattern, &kit, &drums);
 }
 
 /* --- project ------------------------------------------------------------- */
@@ -240,23 +252,31 @@ int project_save(int now)
 
 static void project_load(void)
 {
-    static union { struct project_file v2; struct project_file_v1 v1; } f;
+    static union {
+        struct project_file v4; struct project_file_v3 v3; struct project_file_v1 v1;
+    } f;
     size_t got;
     if (store_state == 0 &&
         store_read(&store, PROJECT_KEY, &f, sizeof f, &got) == STORE_OK &&
-        f.v2.magic == PROJECT_MAGIC) {
-        if ((f.v2.version == PROJECT_VERSION || f.v2.version == 2) && got == sizeof f.v2 &&
-            f.v2.bytes == sizeof f.v2) {
-            pattern = f.v2.pattern;
-            kit = f.v2.kit;
-            if (f.v2.version == 2)                   /* v2 stored FM RATIO as an index */
+        f.v4.magic == PROJECT_MAGIC) {
+        if (f.v4.version == PROJECT_VERSION && got == sizeof f.v4 && f.v4.bytes == sizeof f.v4) {
+            pattern = f.v4.pattern;
+            kit = f.v4.kit;
+            plock_validate(&pattern);
+            return;
+        }
+        if ((f.v3.version == 3 || f.v3.version == 2) && got == sizeof f.v3 &&
+            f.v3.bytes == sizeof f.v3) {
+            seq_pattern_from_v3(&pattern, &f.v3.pattern);
+            kit = f.v3.kit;
+            if (f.v3.version == 2)                   /* v2 stored FM RATIO as an index */
                 for (unsigned v = 0; v < DRUM_VOICES; v++)
                     if (kit.voice[v].engine == DRUM_FM)
                         kit.voice[v].e[FM_RATIO] = (uint8_t)((kit.voice[v].e[FM_RATIO] & 15u) * 8u + 4u);
             return;
         }
         if (f.v1.version == 1 && got == sizeof f.v1 && f.v1.bytes == sizeof f.v1) {
-            pattern = f.v1.pattern;                  /* migrate: kit to the new layout */
+            seq_pattern_from_v3(&pattern, &f.v1.pattern);   /* migrate both */
             drum_kit_from_v1(&kit, &f.v1.kit);
             return;
         }

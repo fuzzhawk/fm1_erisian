@@ -169,7 +169,12 @@ static const int8_t object_damp[5][4] = {         /* decay index offsets per mod
 
 void drums_prepare_voice(struct drums *d, const struct drum_kit *kit, unsigned v)
 {
-    const struct drum_voice_params *p = &kit->voice[v];
+    drums_prepare_params(d, &kit->voice[v], &d->derived[v]);
+}
+
+void drums_prepare_params(const struct drums *d, const struct drum_voice_params *p,
+                          struct drum_derived *out)
+{
     struct drum_derived x;
     memset(&x, 0, sizeof x);
     x.engine = p->engine < DRUM_ENGINES ? p->engine : DRUM_OFF;
@@ -308,7 +313,7 @@ void drums_prepare_voice(struct drums *d, const struct drum_kit *kit, unsigned v
     unsigned pan = clamp127(c[DC_PAN]);
     x.pan_l = pan <= 64 ? 32767 : (int32_t)((127 - pan) * 32767 / 63);
     x.pan_r = pan >= 64 ? 32767 : (int32_t)(pan * 32767 / 64);
-    d->derived[v] = x;
+    *out = x;
 }
 
 void drums_prepare(struct drums *d, const struct drum_kit *kit)
@@ -393,11 +398,14 @@ FM1_AUDIO_CODE static inline int32_t white(uint32_t *s)
     return (int32_t)(int16_t)(rnd(s) >> 16);
 }
 
-FM1_AUDIO_CODE void drums_trigger(struct drums *d, unsigned v, unsigned velocity)
+FM1_AUDIO_CODE void drums_trigger(struct drums *d, unsigned v, unsigned velocity, unsigned lock)
 {
     if (v >= DRUM_VOICES)
         return;
-    const struct drum_derived *x = &d->derived[v];
+    const struct drum_derived *x = lock && lock <= SEQ_LOCK_SLOTS ? &d->locked[lock - 1]
+                                                                 : &d->derived[v];
+    if (x->engine != d->derived[v].engine)   /* stale slot (engine changed): kit sound */
+        x = &d->derived[v];
     if (x->engine == DRUM_OFF)
         return;
     if (x->engine == DRUM_SAMPLE && !d->sample.pcm)
@@ -408,6 +416,7 @@ FM1_AUDIO_CODE void drums_trigger(struct drums *d, unsigned v, unsigned velocity
                 !d->voice[o].fade)
                 d->voice[o].fade = CHOKE_FADE;
     struct drum_voice_state *s = &d->voice[v];
+    s->x = x;
     /* Field by field: a struct clear could become a memset call (flash). */
     if (!s->noise) s->noise = 1;
     s->fade = 0;
@@ -648,7 +657,7 @@ FM1_AUDIO_CODE static void render_voice(struct drums *d, unsigned v, int32_t *ou
                                         unsigned from, unsigned to)
 {
     struct drum_voice_state *s = &d->voice[v];
-    const struct drum_derived *x = &d->derived[v];
+    const struct drum_derived *x = s->x ? s->x : &d->derived[v];
     for (unsigned f = from; f < to && s->active; f++) {
         int32_t y = engine_sample(d, v, s, x);
         if (y == ENDED) { s->active = 0; break; }
@@ -708,6 +717,6 @@ FM1_AUDIO_CODE void drums_render(struct drums *d, int32_t *out, unsigned frames,
             at = until;
         }
         if (e < n)
-            drums_trigger(d, ev[e].voice, ev[e].velocity);
+            drums_trigger(d, ev[e].voice, ev[e].velocity, ev[e].lock);
     }
 }

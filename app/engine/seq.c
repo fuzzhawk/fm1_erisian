@@ -31,6 +31,10 @@ void seq_pattern_init(struct seq_pattern *p)
     memset(p, 0, sizeof *p);
     p->length = 16;
     p->bpm100 = 12000;
+    for (unsigned i = 0; i < SEQ_LOCK_SLOTS; i++) {
+        p->locks[i].voice = SEQ_UNLOCKED;
+        memset(p->locks[i].value, SEQ_UNLOCKED, sizeof p->locks[i].value);
+    }
     for (unsigned v = 0; v < SEQ_VOICES; v++) {
         struct seq_voice_track *t = &p->voices[v];
         t->length = 16;
@@ -44,11 +48,33 @@ void seq_pattern_init(struct seq_pattern *p)
     }
 }
 
+void seq_pattern_from_v3(struct seq_pattern *p, const struct seq_pattern_v3 *old)
+{
+    seq_pattern_init(p);
+    p->length = old->length;
+    p->bpm100 = old->bpm100;
+    for (unsigned v = 0; v < SEQ_VOICES; v++) {
+        const struct seq_voice_track_v3 *o = &old->voices[v];
+        struct seq_voice_track *t = &p->voices[v];
+        t->length = o->length;
+        t->speed = o->speed;
+        t->swing = o->swing;
+        t->mute = o->mute;
+        for (unsigned s = 0; s < SEQ_STEPS; s++) {
+            t->steps[s].on = o->steps[s].on;
+            t->steps[s].velocity = o->steps[s].velocity;
+            t->steps[s].probability = o->steps[s].probability;
+            t->steps[s].ratchet = o->steps[s].ratchet;
+        }
+    }
+}
+
 void seq_start(struct seq_state *s, uint32_t seed)
 {
     memset(s, 0, sizeof *s);
     s->random = seed ? seed : 0x23F00DD5u;
     s->phase = PULSE_UNIT; /* the first pulse is due at frame 0 */
+    memset(s->early_step, 0xFF, sizeof s->early_step);
     s->playing = 1;
 }
 
@@ -56,10 +82,12 @@ void seq_start(struct seq_state *s, uint32_t seed)
  * volatile pointer stops the compiler turning the loop back into one. */
 FM1_AUDIO_CODE void seq_stop(struct seq_state *s)
 {
-    volatile uint8_t *left = s->pending_left;
+    volatile uint8_t *left = s->pending_left, *early = s->early_step;
     s->playing = 0;
-    for (unsigned v = 0; v < SEQ_VOICES; v++)
+    for (unsigned v = 0; v < SEQ_VOICES; v++) {
         left[v] = 0;
+        early[v] = 0xFF;
+    }
 }
 
 FM1_AUDIO_CODE static uint32_t next_random(struct seq_state *s)
@@ -78,6 +106,58 @@ FM1_AUDIO_CODE unsigned seq_voice_step(const struct seq_state *s, const struct s
     return s->vindex[voice];
 }
 
+/* Micro-timing in pulses for a speed: micro twelfths of period pulses,
+ * micro * period / 12 by multiply and shift (period is 6..48). */
+FM1_AUDIO_CODE static int micro_pulses(int micro, unsigned period)
+{
+    if (micro > SEQ_MICRO_MAX) micro = SEQ_MICRO_MAX;
+    if (micro < -SEQ_MICRO_MAX) micro = -SEQ_MICRO_MAX;
+    unsigned m = (unsigned)(micro < 0 ? -micro : micro);
+    int p = (int)((m * period * 5462u + 32768u) >> 16);
+    return micro < 0 ? -p : p;
+}
+
+/* Swing delays every second step by (swing - 50) % of two steps:
+ * 2 * period * (swing - 50) / 100, as multiply and shift. */
+FM1_AUDIO_CODE static unsigned swing_pulses(const struct seq_voice_track *t, unsigned index,
+                                            unsigned period)
+{
+    if (!(index & 1) || t->swing <= 50) return 0;
+    unsigned sw = t->swing > 75 ? 75 : t->swing;
+    return (2u * period * (sw - 50u) * 656u + 32768u) >> 16;
+}
+
+/* Probability check: r in 0..99 from the top 16 random bits. */
+FM1_AUDIO_CODE static int passes(struct seq_state *s, const struct seq_step *st)
+{
+    return st->probability >= 100 ||
+           (((next_random(s) >> 16) * 100u) >> 16) < st->probability;
+}
+
+/* Queue a step's hits: the first after delay pulses (0 = now), then the
+ * ratchets. Returns the new event count. */
+FM1_AUDIO_CODE static unsigned start_hits(struct seq_state *s, const struct seq_voice_track *t,
+                                          unsigned v, unsigned speed, const struct seq_step *st,
+                                          unsigned delay, uint16_t frame,
+                                          struct seq_event *ev, unsigned n, unsigned max)
+{
+    unsigned want = st->ratchet < 1 ? 1 : st->ratchet > 4 ? 4 : st->ratchet;
+    unsigned hits = ratchet_hits[speed][want - 1];
+    unsigned gap = ratchet_gap[speed][want - 1];
+    if (delay == 0) {
+        if (n < max && !t->mute)
+            ev[n++] = (struct seq_event){ frame, (uint8_t)v, st->velocity, st->lock };
+        hits--;
+        delay = gap;
+    }
+    s->pending_left[v] = (uint8_t)hits;
+    s->pending_gap[v] = (uint8_t)gap;
+    s->pending_wait[v] = (uint8_t)(delay - 1);
+    s->pending_velocity[v] = st->velocity;
+    s->pending_lock[v] = st->lock;
+    return n;
+}
+
 /* Everything due at the current pulse, emitted at frame. */
 FM1_AUDIO_CODE static unsigned on_pulse(struct seq_state *s, const struct seq_pattern *p,
                          uint16_t frame, struct seq_event *ev, unsigned n,
@@ -90,7 +170,8 @@ FM1_AUDIO_CODE static unsigned on_pulse(struct seq_state *s, const struct seq_pa
         if (s->pending_left[v]) {
             if (s->pending_wait[v] == 0) {
                 if (n < max && !t->mute)
-                    ev[n++] = (struct seq_event){ frame, (uint8_t)v, s->pending_velocity[v] };
+                    ev[n++] = (struct seq_event){ frame, (uint8_t)v, s->pending_velocity[v],
+                                                  s->pending_lock[v] };
                 if (--s->pending_left[v])
                     s->pending_wait[v] = (uint8_t)(s->pending_gap[v] - 1);
             } else {
@@ -110,38 +191,36 @@ FM1_AUDIO_CODE static unsigned on_pulse(struct seq_state *s, const struct seq_pa
             s->vpulse[v] = 0;
             if (++s->vindex[v] >= len) s->vindex[v] = 0;
         }
-        if (at)
+
+        if (at) {
+            /* An early step: the next one, fired from the end of this one. */
+            unsigned next = index + 1 >= len ? 0 : index + 1;
+            const struct seq_step *ns = &t->steps[next];
+            if (ns->on && ns->micro < 0 && s->early_step[v] != next) {
+                int offset = (int)swing_pulses(t, next, period) + micro_pulses(ns->micro, period);
+                if (offset < 0 && (int)at == (int)period + offset) {
+                    s->early_step[v] = (uint8_t)next;
+                    if (passes(s, ns))
+                        n = start_hits(s, t, v, speed, ns, 0, frame, ev, n, max);
+                }
+            }
             continue;
+        }
 
         const struct seq_step *st = &t->steps[index];
-        if (!st->on)
+        if (s->early_step[v] == index) {         /* already played early */
+            s->early_step[v] = 0xFF;
             continue;
-        /* r in 0..99 from the top 16 random bits, by multiply and shift. */
-        if (st->probability < 100 &&
-            (((next_random(s) >> 16) * 100u) >> 16) >= st->probability)
+        }
+        s->early_step[v] = 0xFF;
+        if (!st->on || !passes(s, st))
             continue;
-
+        int offset = (int)swing_pulses(t, index, period) + micro_pulses(st->micro, period);
         unsigned want = st->ratchet < 1 ? 1 : st->ratchet > 4 ? 4 : st->ratchet;
-        unsigned hits = ratchet_hits[speed][want - 1];
         unsigned gap = ratchet_gap[speed][want - 1];
-        /* Swing delays every second step by (swing - 50) % of two steps:
-         * 2 * period * (swing - 50) / 100, as multiply and shift. */
-        unsigned delay = 0;
-        if ((index & 1) && t->swing > 50) {
-            unsigned sw = t->swing > 75 ? 75 : t->swing;
-            delay = (2u * period * (sw - 50u) * 656u + 32768u) >> 16;
-            if (delay >= gap) delay = gap - 1;
-        }
-        if (delay == 0) {
-            if (n < max && !t->mute)
-                ev[n++] = (struct seq_event){ frame, (uint8_t)v, st->velocity };
-            hits--;
-            delay = gap;
-        }
-        s->pending_left[v] = (uint8_t)hits;
-        s->pending_gap[v] = (uint8_t)gap;
-        s->pending_wait[v] = (uint8_t)(delay - 1);
-        s->pending_velocity[v] = st->velocity;
+        unsigned delay = offset > 0 ? (unsigned)offset : 0;   /* early: on time when it was missed */
+        if (delay >= gap) delay = gap - 1;
+        n = start_hits(s, t, v, speed, st, delay, frame, ev, n, max);
     }
     return n;
 }

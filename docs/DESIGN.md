@@ -90,8 +90,9 @@ wow/flutter), bitcrush + sample-rate reduction.
 - Master pattern length **1–64 steps** (4 pages × 16). Each voice has its own
   length inside it; all voices reset when the master length ends.
 - Per-voice speed: 2×, 1×, ¾×, ½×, ¼×. Master length counts 1/16 steps.
-- Per step: trig, velocity, probability, ratchet, micro-timing, parameter
-  locks (pool-capped per pattern).
+- Per step: trig, velocity, probability, ratchet, micro-timing (±6/12 step),
+  parameter locks (pool of 64 locked steps per pattern; any engine or
+  common-chain parameter). Project format 4 stores them; 1–3 convert.
 - Swing per voice.
 - Live chains of patterns (SHIFT+SEL), saved with the project.
 - Note repeat: hold ARP + pad/step in drum mode.
@@ -191,8 +192,19 @@ Modes and pages:
 - **TIMING** — voice length, speed, swing, pattern length.
 
 Choice parameters (filter type, transient, texture, exciter, material, mode,
-FM ratio) move one choice per detent. Holding a step: KNOB1 velocity, KNOB2
-probability, KNOB3 ratchet, KNOB4 on/off.
+FM ratio) move one choice per detent.
+
+Steps (2026-11-17): a tap toggles a step when the key comes up; holding it
+and turning a knob edits it instead (and the release leaves it alone).
+- Hold a step in **SEQ or TIMING**: KNOB1 velocity, KNOB2 probability,
+  KNOB3 ratchet, KNOB4 micro-timing (−6..+6 twelfths of a step; early steps
+  fire from the end of the step before, on time right after PLAY).
+- Hold a step in **ENGINE or SHAPE**: the four knobs **parameter-lock** the
+  parameters on screen for that step (title "STEP n LOCK"; locked values in
+  gold, kit values dim). Locking an empty step turns it on. Hold step + EDIT
+  clears its locks; turning a step off drops them. Locked steps show a notch
+  in the grid. Pool: 64 locked steps per pattern ("LOCK POOL FULL"); an
+  engine change drops that voice's engine-parameter locks.
 
 ---
 
