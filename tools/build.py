@@ -188,6 +188,32 @@ def check_entry(elf: Path) -> None:
         raise BuildError(f"entry point is 0x{entry:08x}, expected 0x{ENTRY_POINT:08x}")
 
 
+# Sections the startup code copies from flash into SRAM. platform/link.ld
+# defines their load addresses as consecutive offsets after .text
+# (data_lma = text + |text|, _ram0_data_lma = data_lma + |data|,
+# cache_ram_data_lma = _ram0_data_lma + |ram0_data|), so app.bin must be these
+# sections' contents back to back, in this order. Extracting .text alone leaves
+# the RAM code and initialised data out of the image: the startup then copies
+# erased flash into SRAM and jumps into it.
+IMAGE_SECTIONS = (".text", ".data", ".ram0_data", ".cache_ram_data")
+
+
+def write_image(objcopy: Path, elf: Path, output: Path, image: Path) -> None:
+    parts = output / "sections"
+    parts.mkdir(parents=True, exist_ok=True)
+    blob = bytearray()
+    for section in IMAGE_SECTIONS:
+        part = parts / (section.strip(".") + ".bin")
+        part.unlink(missing_ok=True)
+        run([str(objcopy), "-O", "binary", "-j", section, str(elf), str(part)])
+        data = part.read_bytes() if part.exists() else b""
+        print(f"section {section:16} {len(data):8} bytes")
+        blob += data
+    if not blob:
+        raise BuildError("empty firmware image")
+    image.write_bytes(bytes(blob))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, default=ROOT / "examples",
@@ -272,7 +298,7 @@ def main() -> int:
         check_entry(elf)
 
         image = output / "app.bin"
-        run([str(objcopy), "-O", "binary", "-j", ".text", str(elf), str(image)])
+        write_image(objcopy, elf, output, image)
         print(f"identity: {identity}")
         print(f"firmware: {elf}")
         print(f"image:    {image} ({image.stat().st_size} bytes)")

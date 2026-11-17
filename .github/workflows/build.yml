@@ -73,7 +73,7 @@ jobs:
         run: sh tests/run_tests.sh
 
   # Boot the new package in the FM-1 emulator (joakimeriksson/fm1-emu, MIT)
-  # before anyone flashes it. Report-only for now: read the log and snapshots.
+  # before anyone flashes it. A halt fails the build; read the log and snapshots.
   emulator:
     needs: firmware
     runs-on: ubuntu-latest
@@ -116,6 +116,10 @@ jobs:
           set -e
           tail -n 120 work/boot.log
           ls -la work
+          if grep -q "halt reason" work/boot.log; then
+            echo "::error::firmware halted in the emulator; do not flash this build"
+            exit 1
+          fi
 
       - name: First instructions
         run: |
