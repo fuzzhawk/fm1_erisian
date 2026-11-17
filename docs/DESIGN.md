@@ -253,16 +253,20 @@ in keys mode.
 
 | Firmware flash | KB |
 |---|---|
+| **Limit** (image must end ≥ 32 KB before the BT/user area) | **460** |
+| Runtime + M-VAVE engine + fm1-core platform + sine example (CI run 3, 2026-11-17) | **281** (`app.bin` 287 808 B; image rounds to 300) |
 | Wav kick | 80 |
-| Git-out (stretch) | 25–40 |
 | Markov tables | ~2–4 |
-| Runtime + M-VAVE engine | TBD (first CI build) |
+| **Left for all ERISIAN DSP, sequencer and UI code** | **~95** |
+| Git-out (stretch) | 25–40 (only if code stays small) |
+
+Flash is tighter than RAM probably is. Keep engines small (shared
+resonator/KS/FM cores), avoid large tables, and track image size in CI.
 
 ---
 
 ## 13. Open questions
 
-- Linked size of the runtime + binary engine (first CI build).
 - Free RAM and CPU per voice (Phase 3 on hardware).
 - Whether flash reads from the audio interrupt are safe (decides wav kick
   playback).

@@ -43,12 +43,19 @@ jobs:
           ls -la build/
           (cd build && sha256sum *.fwsc *.bin | tee SHA256SUMS)
 
+      - name: Memory report
+        run: |
+          python3 tools/build.py --help >/dev/null
+          echo "image bytes: $(stat -c %s build/app.bin)"
+          grep -nE "^ *\.(ram0_data|ram0_bss|cache_ram|data|bss)[ .]|HEAP|_end *=" build/sdk.map | head -n 40 || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: erisian-${{ github.sha }}
           path: |
             build/*.fwsc
             build/*.bin
+            build/sdk.map
             build/SHA256SUMS
             LICENSE
             THIRD_PARTY.md

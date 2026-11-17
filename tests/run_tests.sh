@@ -18,8 +18,12 @@ for t in "$ROOT"/tests/test_*.c; do
     [ -e "$t" ] || continue
     name=$(basename "$t" .c)
     echo "== $name"
-    $CC -std=c99 -Wall -Wextra -Werror -O1 -g -I"$ROOT/include" \
-        "$t" -o "$OUT/$name" && "$OUT/$name" || fail=1
+    # A test lists the app sources it needs on a "/* deps: a.c b.c */" line.
+    deps=$(sed -n 's|^/\* deps: \(.*\) \*/$|\1|p' "$t" | head -n1)
+    srcs=""
+    for d in $deps; do srcs="$srcs $ROOT/$d"; done
+    $CC -std=c99 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
+        -I"$ROOT/include" "$t" $srcs -o "$OUT/$name" && "$OUT/$name" || fail=1
 done
 
 [ "$fail" -eq 0 ] && echo "all host tests passed" || { echo "host tests FAILED"; exit 1; }
