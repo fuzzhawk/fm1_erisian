@@ -68,7 +68,7 @@ Rules that follow:
 | Shaker | Particle model: bead count, shell resonance, shake energy. |
 | Klunk-bonk-crunch | Struck objects (modal: wood/plastic/tin/bottle, mallet hardness, damping), crunch textures (dense granular noise), rattle/buzz add-on. |
 | Hat/cymbal | Modal inharmonic partials, closed/open decay, tightness. Reverse mode with swell synced to land on the next beat/bar. |
-| Wav kick | Embedded 80 KB, 16-bit mono 44.1 kHz, **uncompressed**. Hybrid playback: first ~4 KB in RAM, tail from flash (fall back to all-RAM if flash reads from the audio interrupt prove unsafe). |
+| Wav kick | Charles's own sample, ~30 KB, 16-bit mono 44.1 kHz (~0.34 s), **uncompressed**. Stored in user flash (uploaded once with tools/uploader), loaded into RAM at boot, played from RAM. |
 | Noise | Tempo-synced riser/fall (1/2/4 bars) with filter sweep and pitch; impact/boom (thump + sub drop + tail). |
 
 ### Lo-fi & transient layer (per voice)
@@ -248,7 +248,7 @@ in keys mode.
 
 | RAM | KB |
 |---|---|
-| Wav kick head | 4 |
+| Wav kick (whole sample) | ~30 |
 | Tape delay (mono, reduced rate) | ~30–40 |
 | Plate reverb (half rate) | ~30–45 |
 | Glitch capture buffer | ~44–88 |
@@ -262,7 +262,7 @@ in keys mode.
 | **Limit**: image area must end ≥ 32 KB before the BT/user area (0x73000) | **460** |
 | Runtime + M-VAVE engine + fm1-core platform + sine, incl. RAM sections (CI run 10, 2026-11-17) | **376** (`app.bin` 366 300 B; image area 0x5E000) |
 | **Left for everything ERISIAN adds** | **~84** |
-| Wav kick, uncompressed | 80 → **does not fit next to the code; see open question** |
+| Wav kick | 0 (lives in user flash, not the firmware) |
 
 Of the image, 78.5 KB is `.ram0_data` (code and data copied to SRAM at boot),
 so it also uses that much RAM.
@@ -274,9 +274,7 @@ resonator/KS/FM cores), avoid large tables, and track image size in CI.
 
 ## 13. Open questions
 
-- **Where the 80 KB kick lives**: only ~84 KB of firmware flash is left for
-  all ERISIAN code. Options: user partition (one-time upload), lossless or
-  SEA compression, or a smaller kick.
+- Kick: decided 2026-11-17 — user partition, uploaded once over USB MIDI.
 - Free RAM and CPU per voice (Phase 3 on hardware).
 - Whether flash reads from the audio interrupt are safe (decides wav kick
   playback).
