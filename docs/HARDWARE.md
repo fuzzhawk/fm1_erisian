@@ -35,7 +35,10 @@ Verified on Charles's unit (0x856014).
   Most likely a boot loop (early crash or watchdog reset) before USB/audio start.
 - M-Flasher then offered its own bootloader for recovery; installed it.
   Holding REC at power-on now shows the M-Flasher download-mode screen.
-- Status: recovery to V15 / full backup pending.
+- Recovered: restored V15 (as shipped) with M-Flasher, keeping the M-Flasher
+  bootloader. Everything works. Verified on Charles's unit (0x856014).
+- Same package in the FM-1 web emulator: blank screen, no sound. So the fault
+  is in the build/package, not the unit.
 
 Note: with the M-Flasher bootloader, REC (not OCT−) at power-on is the
 bootloader's download mode. ERISIAN's own rescue combo (OCT−) is separate and
