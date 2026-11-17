@@ -116,6 +116,22 @@ wow/flutter), bitcrush + sample-rate reduction.
   | Sine lead | 2-op FM, mono/poly, glide, vibrato (shares FM drum code). |
   | Pad | Resonator bank excited by noise/keys (shares code with vibraphone and metallic KS). |
   | Git-out granular | **Stretch.** Resampled to 22 kHz, SEA ~3 bit (~25–40 KB flash), decoded to RAM at boot as 8-bit (~37 KB). |
+- **First keys build (2026-11-17, not yet heard on hardware):** 3 layers,
+  6-voice pool (released voices stolen first, then the oldest), per-layer
+  engine, zone (LOW/HIGH, overlapping zones stack), octave, mode (POLY,
+  MONO, LEGATO with glide; KOTO and VIBES always retrigger), ADSR, filter
+  with envelope, drive, glide, level, pan. Engines as "cheap first" models:
+  808 BASS (pitch env, drive → fold → tone, click, sub), FM LEAD (2-op:
+  ratio, mod depth/decay/sustain, feedback, vibrato), KOTO (KS: pluck point,
+  damping, decay, brightness, body), FLUTE (tone + harmonics, breath
+  resonator at the note, chiff, vibrato, air; a waveguide can come later),
+  VIBES (3 modes at 1:4:10, mallet hardness, motor tremolo), PAD (noise
+  into 4 resonators, brightness, resonance, spread, air). Saved in the
+  project (format 5; older saves get the default patch).
+- Keys controls: all 27 keys play; OCT−/OCT+ move the keyboard ±3 octaves;
+  SEL or SELECT pick the layer; EDIT cycles PLAY → ENGINE → SHAPE (AMP,
+  FILTER, TONE) → LAYER (MODE/LOW/HIGH/OCT, MIX); ALGORITHM pages; PRESETS
+  tempo; SEQ back to drums (the beat keeps playing in keys mode).
 - **Arpeggiator** (ARP): up, down, up/down, random, as-played, chord.
   Tempo-synced.
 - OCT−/OCT+ change octave.

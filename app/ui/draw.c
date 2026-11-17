@@ -75,3 +75,52 @@ char *fmt_str(char *out, const char *text)
     *out = 0;
     return out;
 }
+
+/* Text centred in a field w pixels wide and 16 high: scale 2 when it fits
+ * (letters 1 px closer for 5 characters, so neighbouring columns keep a gap),
+ * else scale 1. The whole field is painted, so no clear (and no flicker). */
+void ui_field(unsigned x, unsigned y, unsigned w, const char *text, uint16_t fg)
+{
+    unsigned len = (unsigned)strlen(text), scale = 2, pitch = 12;
+    if (len * 12u > w - 4u) pitch = 11;              /* 5 letters in 60 px */
+    if (len && (len - 1u) * pitch + 12u > w - 2u) { scale = 1; pitch = 6; }
+    if (len && (len - 1u) * pitch + 6u * scale > w) len = (w - 6u * scale) / pitch + 1u;
+    unsigned total = len ? (len - 1u) * pitch + 6u * scale : 0;
+    unsigned x0 = x + (w - total) / 2u, ty = scale == 1 ? y + 4u : y;
+    char one[2] = { 0, 0 };
+    if (x0 > x) fm1_screen_fill(x, y, x0 - x, 16, COLOR_BG);
+    if (scale == 1 && total) {
+        fm1_screen_fill(x0, y, total, 4, COLOR_BG);
+        fm1_screen_fill(x0, y + 12, total, 4, COLOR_BG);
+    }
+    for (unsigned i = 0; i < len; i++) {
+        one[0] = text[i];
+        draw_text(x0 + i * pitch, ty, one, scale, fg, COLOR_BG);
+    }
+    if (x0 + total < x + w) fm1_screen_fill(x0 + total, y, x + w - x0 - total, 16, COLOR_BG);
+}
+
+/* A value bar h pixels tall: the coloured span grows from the bottom, or from
+ * the middle when bipolar. max 0 = nothing to show (blank). */
+void ui_bar(unsigned x, unsigned y, unsigned w, unsigned h, unsigned value, unsigned max,
+            int bipolar, uint16_t color)
+{
+    unsigned a = h, b = h;          /* coloured span [a, b) from the top */
+    if (max) {
+        if (value > max) value = max;
+        unsigned level = h - value * h / max;
+        if (bipolar) {
+            unsigned mid = h / 2u;
+            a = level < mid ? level : mid;
+            b = level < mid ? mid : level;
+            if (a == b) { a = mid - 1u; b = mid + 1u; }
+        } else {
+            a = level;
+            if (a >= h) a = h - 1u;       /* a sliver at zero: the slot exists */
+        }
+    }
+    uint16_t off = max ? UI_BAR_OFF : COLOR_BG;
+    if (a) fm1_screen_fill(x, y, w, a, off);
+    if (b > a) fm1_screen_fill(x, y + a, w, b - a, color);
+    if (b < h) fm1_screen_fill(x, y + b, w, h - b, off);
+}

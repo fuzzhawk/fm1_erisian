@@ -12,6 +12,8 @@ struct seq_pattern pattern;
 struct drum_kit kit;
 struct drums drums;
 struct seq_state seq;
+struct synth_patch patch;
+struct synth synth;
 
 /* Control -> audio requests. Single producer, single consumer: the control
  * task writes, then bumps the counter; the interrupt reads up to it. */
@@ -20,6 +22,12 @@ static volatile uint8_t pad_voice[PAD_QUEUE], pad_velocity[PAD_QUEUE];
 static volatile uint32_t pad_head;      /* written by the control task */
 static uint32_t pad_tail;               /* audio interrupt */
 static volatile uint32_t play_requests, stop_requests;
+#define NOTE_QUEUE 32u
+static volatile uint8_t note_key[NOTE_QUEUE], note_velocity[NOTE_QUEUE];
+static volatile uint32_t note_head;     /* control task */
+static uint32_t note_tail;              /* audio interrupt */
+static volatile uint32_t keys_off_requests;
+static uint32_t keys_off_seen;
 static uint32_t play_seen, stop_seen;
 static volatile uint32_t blocks_done;
 static volatile int32_t master_gain = 16384;   /* Q15 */
@@ -37,6 +45,18 @@ void audio_pad(unsigned voice, unsigned velocity)
     pad_velocity[head % PAD_QUEUE] = (uint8_t)velocity;
     pad_head = head + 1;
 }
+
+void audio_note(unsigned key, unsigned velocity)
+{
+    uint32_t head = note_head;
+    if (head - note_tail >= NOTE_QUEUE)
+        return; /* full: drop (a lost note-off is caught by audio_keys_off) */
+    note_key[head % NOTE_QUEUE] = (uint8_t)key;
+    note_velocity[head % NOTE_QUEUE] = (uint8_t)velocity;
+    note_head = head + 1;
+}
+
+void audio_keys_off(void) { keys_off_requests++; }
 
 void audio_set_master(uint16_t knob)
 {
@@ -98,6 +118,14 @@ FM1_AUDIO_CODE int fm1_app_render(int32_t *out, unsigned frames)
     /* drums_render wants events in frame order: pads (frame 0) come first,
      * the sequencer's are already ordered. */
     drums_render(&drums, out, frames, ev, n);
+
+    /* Keys: notes at the start of the block (the panel is scanned far less
+     * often than once per block, so this adds no timing error to speak of). */
+    if (keys_off_requests != keys_off_seen) { keys_off_seen = keys_off_requests; synth_all_off(&synth); }
+    for (unsigned k = 0; note_tail != note_head && k < 16; k++, note_tail++)
+        synth_note(&synth, note_key[note_tail % NOTE_QUEUE], note_velocity[note_tail % NOTE_QUEUE]);
+    synth_render(&synth, out, frames);
+
     mix_master(out, frames, master_gain);
     blocks_done++;
     return 0;

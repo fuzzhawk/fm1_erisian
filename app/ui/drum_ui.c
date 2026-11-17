@@ -46,7 +46,6 @@ static const char *const voice_labels[11] = {
 #define C_ON_SOFT   RGB565(150, 112, 0)
 #define C_HEAD_OFF  RGB565(120, 120, 120)
 #define C_HEAD_ON   RGB565(255, 255, 255)
-#define C_BAR_OFF   RGB565(30, 30, 30)
 
 static unsigned voice;          /* selected voice */
 static unsigned page;           /* 0..3: steps page*16 .. +15 */
@@ -396,29 +395,7 @@ static void draw_header(void)
               1, COLOR_DIM, COLOR_BG);
 }
 
-/* Text centred in a field w pixels wide and 16 high: scale 2 when it fits
- * (letters 1 px closer for 5 characters, so neighbouring columns keep a gap),
- * else scale 1. The whole field is painted, so no clear (and no flicker). */
-static void draw_field(unsigned x, unsigned y, unsigned w, const char *text, uint16_t fg)
-{
-    unsigned len = (unsigned)strlen(text), scale = 2, pitch = 12;
-    if (len * 12u > w - 4u) pitch = 11;              /* 5 letters in 60 px */
-    if (len && (len - 1u) * pitch + 12u > w - 2u) { scale = 1; pitch = 6; }
-    if (len && (len - 1u) * pitch + 6u * scale > w) len = (w - 6u * scale) / pitch + 1u;
-    unsigned total = len ? (len - 1u) * pitch + 6u * scale : 0;
-    unsigned x0 = x + (w - total) / 2u, ty = scale == 1 ? y + 4u : y;
-    char one[2] = { 0, 0 };
-    if (x0 > x) fm1_screen_fill(x, y, x0 - x, 16, COLOR_BG);
-    if (scale == 1 && total) {
-        fm1_screen_fill(x0, y, total, 4, COLOR_BG);
-        fm1_screen_fill(x0, y + 12, total, 4, COLOR_BG);
-    }
-    for (unsigned i = 0; i < len; i++) {
-        one[0] = text[i];
-        draw_text(x0 + i * pitch, ty, one, scale, fg, COLOR_BG);
-    }
-    if (x0 + total < x + w) fm1_screen_fill(x0 + total, y, x + w - x0 - total, 16, COLOR_BG);
-}
+#define draw_field(x, y, w, text, fg) ui_field(x, y, w, text, fg)
 
 /* The four knob slots of what is being edited: names and values. */
 /* Returns the value colour: gold for a locked value, dim for one the held
@@ -471,24 +448,7 @@ static void edit_title(char *out)
 
 static void draw_bar(unsigned x, unsigned value, unsigned max, int bipolar)
 {
-    /* Coloured span [a, b) measured from the top of the bar. */
-    unsigned a = BAR_H, b = BAR_H;
-    if (max) {
-        unsigned level = BAR_H - value * BAR_H / max;
-        if (bipolar) {
-            unsigned mid = BAR_H / 2u;
-            a = level < mid ? level : mid;
-            b = level < mid ? mid : level;
-            if (a == b) { a = mid - 1u; b = mid + 1u; }
-        } else {
-            a = level;
-            if (a >= BAR_H) a = BAR_H - 1u;       /* a sliver at zero: the slot exists */
-        }
-    }
-    x += (COL_W - BAR_W) / 2u;
-    if (a) fm1_screen_fill(x, BAR_Y, BAR_W, a, max ? C_BAR_OFF : COLOR_BG);
-    if (b > a) fm1_screen_fill(x, BAR_Y + a, BAR_W, b - a, COLOR_GOLD);
-    if (b < BAR_H) fm1_screen_fill(x, BAR_Y + b, BAR_W, BAR_H - b, max ? C_BAR_OFF : COLOR_BG);
+    ui_bar(x + (COL_W - BAR_W) / 2u, BAR_Y, BAR_W, BAR_H, value, max, bipolar, COLOR_GOLD);
 }
 
 /* Full-screen edit view (ENGINE, SHAPE, TIMING). */
@@ -616,6 +576,7 @@ static void update_leds(uint32_t keys)
     fm1_led_set(BTN_PLAY, audio_playing());
     fm1_led_set(BTN_ENV, pads);
     fm1_led_set(BTN_EDIT, mode != MODE_SEQ);
+    fm1_led_set(BTN_SEQ, 0);              /* unlit: drum mode */
 }
 
 /* --- input ---------------------------------------------------------------- */
@@ -769,5 +730,6 @@ int drum_ui_poll(uint32_t now)
     update_leds(c.keys);
     last_keys = c.keys;
     last_buttons = c.buttons;
-    return buttons_down >> BTN_HOME & 1;
+    if (buttons_down >> BTN_SEQ & 1) return UI_SWITCH;
+    return buttons_down >> BTN_HOME & 1 ? UI_HOME : UI_STAY;
 }

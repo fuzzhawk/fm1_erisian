@@ -48,3 +48,17 @@ print("/* Chamberlin SVF at 2x oversampling: f = 2 sin(pi fc / 2fs), Q14, 30 Hz 
 print("uint16_t table_svf[128] FM1_AUDIO_DATA = {\n" + rows(svf) + "\n};\n")
 print("/* FM modulator ratios, Q8. */")
 print("uint16_t table_ratio[16] FM1_AUDIO_DATA = {\n" + rows(ratio_q8) + "\n};")
+
+# MIDI notes: phase increments and KS periods (samples, Q16).
+note_hz = [440 * 2 ** ((n - 69) / 12) for n in range(128)]
+note_inc = [min(round(f / RATE * 2 ** 32), 2 ** 31) for f in note_hz]
+note_period = [min(round(RATE / f * 65536), 2 ** 32 - 1) for f in note_hz]
+# Fine tune: 2^((i - 64) / (64 * 12)), Q16: +-1 semitone in 1/64 steps.
+cents = [round(2 ** ((i - 64) / (64 * 12)) * 65536) for i in range(129)]
+print()
+print("/* MIDI note n: 32-bit phase increment at 44.1 kHz. */")
+print("uint32_t table_note_inc[128] FM1_AUDIO_DATA = {\n" + rows(note_inc, 6) + "\n};\n")
+print("/* MIDI note n: period in samples, Q16. */")
+print("uint32_t table_note_period[128] FM1_AUDIO_DATA = {\n" + rows(note_period, 6) + "\n};\n")
+print("/* Fine tune multipliers, Q16: index 0..128 = -1..+1 semitone. */")
+print("uint32_t table_fine[129] FM1_AUDIO_DATA = {\n" + rows(cents, 8) + "\n};")

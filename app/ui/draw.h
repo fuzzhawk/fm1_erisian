@@ -26,4 +26,12 @@ char *fmt_uint(char *out, uint32_t value);
 char *fmt_hex(char *out, uint32_t value, unsigned digits);
 char *fmt_str(char *out, const char *text);
 
+/* Widgets shared by the drum and keys screens. */
+#define UI_BAR_OFF RGB565(30, 30, 30)
+/* Text centred in a w x 16 field (scale 2, or 1 if it does not fit); the
+ * whole field is painted, so there is no clear and no flicker. */
+void ui_field(unsigned x, unsigned y, unsigned w, const char *text, uint16_t fg);
+void ui_bar(unsigned x, unsigned y, unsigned w, unsigned h, unsigned value, unsigned max,
+            int bipolar, uint16_t color);
+
 #endif

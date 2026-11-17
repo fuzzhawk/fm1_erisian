@@ -27,9 +27,19 @@
 
 #define PROJECT_KEY 0x01u
 #define PROJECT_MAGIC 0x31505245u /* "ERP1" */
-#define PROJECT_VERSION 4u   /* 4: micro-timing and parameter locks */
+#define PROJECT_VERSION 5u   /* 5: keys patch (three layers) */
 
 struct project_file {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t bytes;
+    struct seq_pattern pattern;
+    struct drum_kit kit;
+    struct synth_patch patch;
+};
+
+/* Version 4: micro-timing and parameter locks, no keys patch. */
+struct project_file_v4 {
     uint32_t magic;
     uint16_t version;
     uint16_t bytes;
@@ -92,6 +102,12 @@ static struct upload upload;
 static int store_state = 1;    /* 1 = not mounted yet, 0 = ok, <0 = error */
 static int rescue;
 static int status_page;
+static int keys_mode;            /* SEQ switches drum <-> keys */
+
+static void ui_say(const char *text)
+{
+    if (keys_mode) keys_ui_say(text); else drum_ui_say(text);
+}
 static uint32_t largest_free;
 static char upload_text[24] = "USB IDLE";
 
@@ -161,6 +177,7 @@ static void apply_kit(void)
     drums_set_tempo(&drums, &kit, pattern.bpm100);
     drums_prepare(&drums, &kit);
     plock_prepare_all(&pattern, &kit, &drums);
+    synth_prepare(&synth, &patch);
 }
 
 /* --- project ------------------------------------------------------------- */
@@ -198,6 +215,7 @@ static void snapshot(void)
     save_buf.bytes = (uint16_t)sizeof save_buf;
     save_buf.pattern = pattern;
     save_buf.kit = kit;
+    save_buf.patch = patch;
 }
 
 static int save_flush(void)
@@ -231,7 +249,7 @@ static int save_flush(void)
     p = fmt_str(p, "MS -");
     p = fmt_uint(p, last_save.missed_blocks);
     fmt_str(p, "BLK");
-    drum_ui_say(t);
+    ui_say(t);
     return r;
 }
 
@@ -246,20 +264,29 @@ int project_save(int now)
     if (now || !audio_playing())
         return save_flush();
     save_pending = 1;
-    drum_ui_say("SAVE PENDING: STOP TO WRITE");
+    ui_say("SAVE PENDING: STOP TO WRITE");
     return STORE_OK;
 }
 
 static void project_load(void)
 {
     static union {
-        struct project_file v4; struct project_file_v3 v3; struct project_file_v1 v1;
+        struct project_file v5; struct project_file_v4 v4; struct project_file_v3 v3;
+        struct project_file_v1 v1;
     } f;
     size_t got;
+    synth_patch_default(&patch);                     /* older saves have no keys */
     if (store_state == 0 &&
         store_read(&store, PROJECT_KEY, &f, sizeof f, &got) == STORE_OK &&
-        f.v4.magic == PROJECT_MAGIC) {
-        if (f.v4.version == PROJECT_VERSION && got == sizeof f.v4 && f.v4.bytes == sizeof f.v4) {
+        f.v5.magic == PROJECT_MAGIC) {
+        if (f.v5.version == PROJECT_VERSION && got == sizeof f.v5 && f.v5.bytes == sizeof f.v5) {
+            pattern = f.v5.pattern;
+            kit = f.v5.kit;
+            patch = f.v5.patch;
+            plock_validate(&pattern);
+            return;
+        }
+        if (f.v4.version == 4 && got == sizeof f.v4 && f.v4.bytes == sizeof f.v4) {
             pattern = f.v4.pattern;
             kit = f.v4.kit;
             plock_validate(&pattern);
@@ -346,6 +373,15 @@ static void draw_status_page(void)
         draw_line(8, 108, kick_state ? "KICK ERROR" : "KICK NONE", 2, COLOR_DIM, COLOR_BG);
     }
     draw_line(8, 132, upload_text, 2, COLOR_TEXT, COLOR_BG);
+    {   /* CPU headroom: overruns since boot (busy keys + beat is the test) */
+        struct fm1_audio_stats as;
+        fm1_audio_stats_read(&as);
+        p = fmt_str(t, "AUDIO OVERRUNS ");
+        p = fmt_uint(p, as.overruns);
+        p = fmt_str(p, "  PEAK ");
+        fmt_uint(p, as.peak_ticks);
+        draw_line(8, 148, t, 1, COLOR_TEXT, COLOR_BG);
+    }
     if (last_save.valid) {
         p = fmt_str(t, "LAST SAVE ");
         p = fmt_uint(p, last_save.ms);
@@ -367,7 +403,7 @@ static void draw_status_page(void)
     p = fmt_str(t, "ERASED FREE ");
     fmt_str(fmt_uint(p, store_state == 0 ? store_erased_sectors(&store) * 4 : 0), "K");
     draw_line(8, 184, t, 1, COLOR_DIM, COLOR_BG);
-    draw_line(8, 200, "HOME: BACK TO DRUMS", 1, COLOR_DIM, COLOR_BG);
+    draw_line(8, 200, "HOME: BACK", 1, COLOR_DIM, COLOR_BG);
     draw_line(8, 212, "UPLOAD KICK: ERISIAN-UPLOADER.HTML", 1, COLOR_DIM, COLOR_BG);
 }
 
@@ -428,8 +464,10 @@ void groove_screen_init(void)
     fmt_str(fmt_str(t, "V "), ERISIAN_VERSION);
     draw_line(8, 120, t, 1, COLOR_DIM, COLOR_BG);
     drums_init(&drums);
+    synth_init(&synth);
     seq_pattern_init(&pattern);
     drum_kit_default(&kit);
+    synth_patch_default(&patch);
     apply_kit();
 }
 
@@ -476,6 +514,7 @@ void groove_screen_control(void)
         project_load();
         apply_kit();
         status_page = rescue;
+        keys_ui_init();
         if (status_page) draw_status_page(); else drum_ui_init();
         return;
     }
@@ -491,12 +530,17 @@ void groove_screen_control(void)
         fm1_controls_read(&peek);
         audio_set_master(peek.knob);
         int home = peek.buttons >> BUTTON_HOME & 1;
-        if (home && !home_was) { status_page = 0; drum_ui_redraw(); }
+        if (home && !home_was) { status_page = 0; if (keys_mode) keys_ui_redraw(); else drum_ui_redraw(); }
         home_was = home;
         return;
     }
     /* The drum UI owns the panel read (a read consumes encoder movement). */
-    if (drum_ui_poll(now)) {
+    int r = keys_mode ? keys_ui_poll(now) : drum_ui_poll(now);
+    if (r == UI_SWITCH) {                       /* SEQ: drum <-> keys */
+        if (keys_mode) { keys_ui_leave(); keys_mode = 0; drum_ui_redraw(); }
+        else { keys_mode = 1; keys_ui_redraw(); }
+    } else if (r == UI_HOME) {
+        if (keys_mode) keys_ui_leave();
         status_page = 1;
         home_was = 1;
         draw_status_page();

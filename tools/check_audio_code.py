@@ -15,25 +15,30 @@ import sys
 AUDIO = re.compile(r"^(fm1_app_render|fm1_output_mix|drums_render|drums_trigger|render_voice|"
                    r"sine|decay|mix_master|seq_render|on_pulse|next_random|seq_speed_period|"
                    r"seq_voice_step|seq_stop|engine_sample|transient|svf2x|soft15|rnd|white|clamp15|"
-                   r"micro_pulses|swing_pulses|passes|start_hits)$")
+                   r"micro_pulses|swing_pulses|passes|start_hits|"
+                   r"synth_note|synth_render|synth_all_off|synth_voice_render|synth_engine_sample|"
+                   r"isqrt32|note_inc|resonator_set|resonate|engine_start|alloc_voice|voice_note|"
+                   r"layer_note|find_layer_voice|fold15|vibrato)$")
 RAM_LO, RAM_HI = 0x01C00000, 0x01C80000
 FLASH_LO, FLASH_HI = 0x02000000, 0x02100000
 
 objdump, elf = sys.argv[1], sys.argv[2]
 run = lambda *a: subprocess.run([objdump, *a, elf], capture_output=True, text=True).stdout
 
-# 1. Where each audio function is (symbol table).
+# 1. Where each audio function is (symbol table). Static helpers shared
+# through a header (dsp.h) exist once per file: check every copy.
 symbols = {}
 for line in run("-t").splitlines():
     parts = line.split()
     if len(parts) >= 2 and re.fullmatch(r"[0-9a-f]{8,16}", parts[0]):
-        symbols.setdefault(parts[-1], int(parts[0], 16))
+        symbols.setdefault(parts[-1], set()).add(int(parts[0], 16))
 audio = {n: a for n, a in symbols.items() if AUDIO.match(n)}
 
 problems = []
-for name, addr in sorted(audio.items()):
-    if not RAM_LO <= addr < RAM_HI:
-        problems.append(f"{name} is at 0x{addr:08x}, not in SRAM (missing FM1_AUDIO_CODE?)")
+for name, addrs in sorted(audio.items()):
+    for addr in sorted(addrs):
+        if not RAM_LO <= addr < RAM_HI:
+            problems.append(f"{name} is at 0x{addr:08x}, not in SRAM (missing FM1_AUDIO_CODE?)")
 
 # 2. What each audio function references: disassemble the RAM code section
 # (it is a data section to the linker, so -D, not -d).
@@ -57,7 +62,8 @@ for line in text.splitlines():
             problems.append(f"{current} references flash ({name} at 0x{addr:08x}): {line.strip()}")
 
 print(f"audio functions in the symbol table: "
-      + ", ".join(f"{n}@0x{a:08x}" for n, a in sorted(audio.items())) or "none")
+      + ", ".join(f"{n}@" + "/".join(f"0x{a:08x}" for a in sorted(v))
+                  for n, v in sorted(audio.items())) or "none")
 print(f"audio functions disassembled: {', '.join(sorted(seen)) or 'none'}")
 if not audio or not seen:
     print("objdump -D sample (first function headers):")

@@ -9,4 +9,7 @@ extern uint32_t table_tune[128];
 extern uint32_t table_decay[128];
 extern uint16_t table_ratio[16];
 extern uint16_t table_svf[128];   /* Q14 */
+extern uint32_t table_note_inc[128];     /* MIDI note -> phase increment */
+extern uint32_t table_note_period[128];  /* MIDI note -> period, samples Q16 */
+extern uint32_t table_fine[129];         /* Q16, -1..+1 semitone */
 #endif
