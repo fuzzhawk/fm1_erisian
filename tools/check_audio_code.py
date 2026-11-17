@@ -19,8 +19,10 @@ FLASH_LO = 0x02000000
 
 objdump, elf = sys.argv[1], sys.argv[2]
 text = subprocess.run([objdump, "-d", elf], capture_output=True, text=True).stdout
-header = re.compile(r"^([0-9a-f]{8}) <([^>]+)>:")
-target = re.compile(r"\b(?:call|jsr|jal|bl|goto|jmp)\b[^\n]*?(?:0x)?([0-9a-f]{7,8})\b(?: <([^>]+)>)?", re.I)
+# Function headers: "<hex address> <name>:"; references inside instructions
+# are annotated by this objdump as "<symbol : hexaddress >".
+header = re.compile(r"^([0-9a-f]+) <([^>]+)>:\s*$")
+target = re.compile(r"<([^<>:]+?)\s*:\s*([0-9a-f]+)\s*>")
 
 functions, current = {}, None
 for line in text.splitlines():
@@ -39,13 +41,14 @@ for name, f in functions.items():
     if not RAM_LO <= f["addr"] < RAM_HI:
         problems.append(f"{name} is at 0x{f['addr']:08x}, not in SRAM (missing FM1_AUDIO_CODE?)")
     for line in f["lines"]:
-        t = target.search(line)
-        if t and int(t.group(1), 16) >= FLASH_LO:
-            problems.append(f"{name} calls flash: {line.strip()}")
+        for sym, addr in target.findall(line):
+            if int(addr, 16) >= FLASH_LO:
+                problems.append(f"{name} references flash ({sym.strip()} at 0x{int(addr, 16):08x}): "
+                                f"{line.strip()}")
 
 print(f"audio functions checked: {', '.join(sorted(checked)) or 'none found'}")
 if not checked:
-    sample = [l for l in text.splitlines() if "call" in l.lower()][:5]
+    sample = [l for l in text.splitlines() if l.endswith(">:")][:5]
     print("objdump call syntax sample:", *sample, sep="\n  ")
 for p in problems:
     print("ERROR:", p)
