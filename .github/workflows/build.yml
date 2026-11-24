@@ -36,7 +36,13 @@ jobs:
       - name: Build ERISIAN
         run: |
           VERSION="0.1.0-${GITHUB_SHA::7}"
-          python3 tools/build.py --clean --package --app app --output build/erisian \
+          python3 tools/build.py --clean --package --app app --shared shared --output build/erisian \
+            --version-string "$VERSION"
+
+      - name: Build MAVIS
+        run: |
+          VERSION="0.0.1-${GITHUB_SHA::7}"
+          python3 tools/build.py --clean --package --app mavis --shared shared --output build/mavis \
             --version-string "$VERSION"
 
       - name: Build sine example (platform reference)
@@ -53,6 +59,10 @@ jobs:
           cp LICENSE THIRD_PARTY.md build/dist/
           cp LICENSES/Apache-2.0.txt build/dist/
           (cd build/dist && sha256sum *.fwsc *.html | tee SHA256SUMS)
+          mkdir -p build/dist-mavis
+          cp build/mavis/fm1.fwsc build/dist-mavis/mavis.fwsc
+          cp LICENSE THIRD_PARTY.md build/dist-mavis/
+          (cd build/dist-mavis && sha256sum *.fwsc | tee SHA256SUMS)
 
       - name: Audio code stays in RAM (ERISIAN)
         run: |
@@ -63,6 +73,14 @@ jobs:
       - name: Memory report (ERISIAN)
         run: python3 tools/mem_report.py build/erisian/sdk.map build/erisian/app.bin
 
+      - name: Audio code stays in RAM (MAVIS)
+        run: |
+          OBJDUMP=$(find ~/.jieli -path '*/bin/objdump' -o -path '*/bin/llvm-objdump' | grep -m1 . || true)
+          python3 tools/check_audio_code.py "$OBJDUMP" build/mavis/sdk.elf
+
+      - name: Memory report (MAVIS)
+        run: python3 tools/mem_report.py build/mavis/sdk.map build/mavis/app.bin
+
       - uses: actions/upload-artifact@v4
         with:
           name: erisian-${{ github.sha }}
@@ -71,10 +89,18 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          name: mavis-${{ github.sha }}
+          path: build/dist-mavis/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
           name: build-details-${{ github.sha }}
           path: |
             build/erisian/sdk.map
             build/erisian/app.bin
+            build/mavis/sdk.map
+            build/mavis/app.bin
             build/sine/sdk.map
 
   host-tests:
@@ -93,6 +119,8 @@ jobs:
           path: |
             build-host/demo.wav
             build-host/engines.wav
+            build-host/keys.wav
+            build-host/mavis_koto.wav
 
   # Boot each package in the FM-1 emulator (joakimeriksson/fm1-emu, MIT)
   # before anyone flashes it. A halt or a repeated reset fails the build.
@@ -108,6 +136,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: erisian-${{ github.sha }}
+          path: pkg
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mavis-${{ github.sha }}
           path: pkg
 
       - name: Cache emulator build
@@ -149,6 +182,30 @@ jobs:
           fi
           if [ -n "${EMU_FAIL:-}" ]; then
             echo "::error::ERISIAN made no sound after PLAY"; exit 1
+          fi
+
+      - name: Boot MAVIS
+        run: |
+          mkdir -p run/work && cd run
+          set +e
+          # Boot, then hold C4 from 1.5 s: the koto must sound.
+          FM1_RESET_TRACE=1 ../emu/target/release/fm1-emu --fwsc ../pkg/mavis.fwsc --ms 4500 \
+            --snap 1700 --keys '300:pot:700,1500-1800:C4' \
+            --wav work/mavis.wav > work/mavis.log 2>&1
+          set -e
+          grep -E "^(chip reset|time|lcd|wav|halt reason)" work/mavis.log || tail -n 30 work/mavis.log
+          python3 ../tools/emu_report.py work/lcd_1700.bmp
+          python3 ../tools/emu_report.py --expect-sound work/mavis.wav || EMU_FAIL=1
+          if grep -q "halt reason" work/mavis.log; then
+            tail -n 60 work/mavis.log
+            echo "::error::MAVIS halted in the emulator; do not flash this build"; exit 1
+          fi
+          resets=$(grep -cE "^chip reset at [0-9]+ ms" work/mavis.log || true)
+          if [ "$resets" -gt 1 ]; then
+            echo "::error::MAVIS reset $resets times in 4.5 s (boot loop?)"; exit 1
+          fi
+          if [ -n "${EMU_FAIL:-}" ]; then
+            echo "::error::MAVIS made no sound when C4 was played"; exit 1
           fi
 
       - uses: actions/upload-artifact@v4

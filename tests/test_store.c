@@ -1,7 +1,7 @@
-/* deps: app/storage/store.c */
+/* deps: shared/storage/store.c */
 /* Host tests for the log-structured store: NOR semantics, power cuts at every
  * write/erase step, bit flips, full flash, wear spreading. */
-#include "../app/storage/store.h"
+#include "../shared/storage/store.h"
 
 #include <stdio.h>
 #include <stdlib.h>

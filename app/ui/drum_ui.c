@@ -7,7 +7,7 @@
 #include <string.h>
 
 #include "../erisian.h"
-#include "draw.h"
+#include "ui/draw.h"
 #include "../engine/plock.h"
 #include "fm1.h"
 

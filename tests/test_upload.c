@@ -1,4 +1,4 @@
-/* deps: app/storage/upload.c app/storage/store.c app/midi/sysex.c */
+/* deps: app/storage/upload.c shared/storage/store.c app/midi/sysex.c */
 #include "../app/storage/upload.h"
 #include "../app/midi/sysex.h"
 

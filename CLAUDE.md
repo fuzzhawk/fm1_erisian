@@ -26,6 +26,9 @@
   date and "verified on Charles's unit (0x856014)".
 
 - Follow docs/DESIGN.md for features, controls and priorities.
+- MAVIS (mavis/, docs/MAVIS.md) is a second firmware built from this repo;
+  every rule here applies to it too. Code both firmwares use lives in
+  shared/ (build with `--shared shared`). Keep ERISIAN building.
 
 ## Workflow
 1. Edit → push to a branch → CI builds the .fwsc and runs host tests.

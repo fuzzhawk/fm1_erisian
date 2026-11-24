@@ -4,7 +4,7 @@
 #include <string.h>
 
 #include "fm1.h"
-#include "font5x7.h"
+#include "ui/font5x7.h"
 
 static const uint8_t *glyph(char c)
 {

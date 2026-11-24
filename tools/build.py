@@ -144,12 +144,13 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def collect_sources(app_directory: Path) -> list[Path]:
+def collect_sources(app_directory: Path, shared: list[Path]) -> list[Path]:
     sources = sorted((ROOT / "platform").glob("*.c"))
-    # The whole application tree: ERISIAN keeps engine, storage and UI code
-    # in subdirectories of app/.
-    sources += sorted(app_directory.rglob("*.c"))
-    sources += sorted(app_directory.rglob("*.S"))
+    # The whole application tree (engine, storage and UI code live in
+    # subdirectories), plus any shared trees (code used by several firmwares).
+    for directory in [*shared, app_directory]:
+        sources += sorted(directory.rglob("*.c"))
+        sources += sorted(directory.rglob("*.S"))
     return sources
 
 
@@ -158,9 +159,10 @@ def object_name(source: Path) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", str(relative)) + ".o"
 
 
-def identity_source(app_directory: Path, product: str) -> tuple[str, str]:
+def identity_source(app_directory: Path, product: str,
+                    shared: list[Path] = ()) -> tuple[str, str]:
     entries: list[str] = []
-    directories = [ROOT / "platform", ROOT / "include", app_directory]
+    directories = [ROOT / "platform", ROOT / "include", *shared, app_directory]
     for directory in directories:
         if not directory.is_dir():
             continue
@@ -220,6 +222,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app", type=Path, default=ROOT / "examples",
                         help="directory with application sources")
+    parser.add_argument("--shared", type=Path, action="append", default=[],
+                        help="extra source tree shared between firmwares (repeatable)")
     parser.add_argument("--toolchain", default=None)
     parser.add_argument("--output", type=Path, default=BUILD)
     parser.add_argument("--product", default="FM-1_8000014",
@@ -228,7 +232,7 @@ def main() -> int:
                         help="also create a .fwsc update image")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--version-string", default=None,
-                        help="defines ERISIAN_VERSION for the application")
+                        help="defines FW_VERSION (and ERISIAN_VERSION) for the application")
     arguments = parser.parse_args()
 
     try:
@@ -239,6 +243,10 @@ def main() -> int:
             shutil.rmtree(output)
 
         app = arguments.app.resolve()
+        shared = [directory.resolve() for directory in arguments.shared]
+        for directory in shared:
+            if not directory.is_dir():
+                raise BuildError(f"no shared directory {directory}")
         if not any(app.glob("*.c")):
             raise BuildError(f"no C sources in application directory {app}")
 
@@ -255,6 +263,7 @@ def main() -> int:
             ROOT / "sdk" / "include",
             ROOT / "sdk" / "include" / "libc",
             ROOT / "platform",
+            *shared,
             app,
         ]
         include_flags = [f"-I{directory}" for directory in includes]
@@ -263,9 +272,10 @@ def main() -> int:
         if arguments.version_string:
             if not re.fullmatch(r"[A-Za-z0-9._+-]{1,24}", arguments.version_string):
                 raise BuildError("invalid --version-string")
-            version_flags = [f'-DERISIAN_VERSION="{arguments.version_string}"']
+            version_flags = [f'-DERISIAN_VERSION="{arguments.version_string}"',
+                             f'-DFW_VERSION="{arguments.version_string}"']
 
-        sources = collect_sources(app)
+        sources = collect_sources(app, shared)
         objects: list[Path] = []
         for source in sources:
             relative = source.relative_to(ROOT) if source.is_relative_to(ROOT) \
@@ -278,7 +288,7 @@ def main() -> int:
                  "-c", str(source), "-o", str(target)])
             objects.append(target)
 
-        identity, source_text = identity_source(app, arguments.product)
+        identity, source_text = identity_source(app, arguments.product, shared)
         identity_file = generated / "identity.c"
         identity_file.write_text(source_text)
         identity_object = objects_directory / "identity.o"

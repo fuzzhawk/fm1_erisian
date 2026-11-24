@@ -31,7 +31,7 @@ for t in "$ROOT"/tests/test_*.c; do
     srcs=""
     for d in $deps; do srcs="$srcs $ROOT/$d"; done
     $CC -std=gnu99 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -DFM1_HOST_TEST \
-        -I"$ROOT/include" "$t" $srcs -lm -o "$OUT/$name" && \
+        -I"$ROOT/include" -I"$ROOT/shared" -I"$ROOT/mavis" "$t" $srcs -lm -o "$OUT/$name" && \
         (cd "$ROOT" && "$OUT/$name" "$OUT/js_frames.bin") || fail=1
 done
 

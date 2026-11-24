@@ -7,8 +7,13 @@ rgrvmusic, an MIT-licensed FM-1 hardware platform derived from M-VAVE's
 FM1-open. fm1-core's git history is preserved in this repository. Its original
 README is kept at [docs/FM1_CORE_README.md](docs/FM1_CORE_README.md).
 
-> **Status: groundwork.** CI currently builds fm1-core's unmodified
-> `examples/sine.c`. Nothing has been verified on hardware yet. Read
+This repository builds two firmwares: **ERISIAN** (drum machine and keys,
+`app/`, [docs/DESIGN.md](docs/DESIGN.md); on hold) and **MAVIS** (a dedicated
+three-engine keyboard synth, `mavis/`, [docs/MAVIS.md](docs/MAVIS.md)). Code
+both use is in `shared/`.
+
+> **Status:** see [docs/HARDWARE.md](docs/HARDWARE.md) for what has been
+> verified on hardware. Read
 > [docs/RECOVERY.md](docs/RECOVERY.md) and take a full flash backup before
 > flashing anything.
 
@@ -39,7 +44,8 @@ sh tests/run_tests.sh                    # host tests, no toolchain needed
 - `tools/fetch_toolchain.sh`, `tools/toolchain.sha256`: toolchain download with pinned hash.
 - `tests/`: host tests (run in CI).
 - `docs/`: hardware log, recovery, changelog.
-- `app/`, `host/`: ERISIAN's own firmware and host shim (coming in later phases).
+- `app/`: ERISIAN's firmware. `mavis/`: MAVIS's firmware.
+- `shared/`: storage and drawing code used by both (`tools/build.py --shared shared`).
 
 ## License
 

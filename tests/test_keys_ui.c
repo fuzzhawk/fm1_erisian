@@ -1,9 +1,9 @@
-/* deps: app/ui/keys_ui.c app/ui/draw.c app/ui/font5x7.c app/engine/synth.c app/engine/drums.c app/engine/seq.c app/engine/tables.c */
+/* deps: app/ui/keys_ui.c shared/ui/draw.c shared/ui/font5x7.c app/engine/synth.c app/engine/drums.c app/engine/seq.c app/engine/tables.c */
 /* Keys UI: keys play notes (octave-safe note-offs), SEL/SELECT pick the
  * layer, EDIT changes mode, ALGORITHM pages, knobs edit what is on screen,
  * SEQ asks to switch. Writes build-host/keys_*.ppm screenshots. */
 #include "../app/erisian.h"
-#include "../app/ui/draw.h"
+#include "../shared/ui/draw.h"
 #include "fm1.h"
 
 #include <stdio.h>

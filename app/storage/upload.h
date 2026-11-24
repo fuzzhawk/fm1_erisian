@@ -23,7 +23,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "store.h"
+#include "storage/store.h"
 
 #define UPLOAD_PROTOCOL 1u
 #define UPLOAD_CHUNK_BYTES 512u

@@ -18,7 +18,9 @@ AUDIO = re.compile(r"^(fm1_app_render|fm1_output_mix|drums_render|drums_trigger|
                    r"micro_pulses|swing_pulses|passes|start_hits|"
                    r"synth_note|synth_render|synth_all_off|synth_voice_render|synth_engine_sample|"
                    r"isqrt32|note_inc|resonator_set|resonate|engine_start|alloc_voice|voice_note|"
-                   r"layer_note|find_layer_voice|fold15|vibrato)$")
+                   r"layer_note|find_layer_voice|fold15|vibrato|"
+                   r"mv_note|mv_render|mv_all_off|koto_block|koto_render|voice_start|"
+                   r"pitch_period|sine1024|xorshift|clamp16|ticks_since|master_clip)$")
 RAM_LO, RAM_HI = 0x01C00000, 0x01C80000
 FLASH_LO, FLASH_HI = 0x02000000, 0x02100000
 

@@ -1,11 +1,11 @@
-/* deps: app/ui/drum_ui.c app/ui/draw.c app/ui/font5x7.c app/engine/drums.c app/engine/plock.c app/engine/seq.c app/engine/tables.c */
+/* deps: app/ui/drum_ui.c shared/ui/draw.c shared/ui/font5x7.c app/engine/drums.c app/engine/plock.c app/engine/seq.c app/engine/tables.c */
 /* Drum UI tests: drive the panel with scripted controls against a fake
  * screen. Checks that EDIT changes mode, ALGORITHM changes page, the grid is
  * hidden while editing, and the knobs edit what the screen shows. Writes
  * build-host/ui_*.ppm screenshots. */
 #include "../app/erisian.h"
 #include "../app/engine/plock.h"
-#include "../app/ui/draw.h"
+#include "../shared/ui/draw.h"
 #include "fm1.h"
 
 #include <stdio.h>

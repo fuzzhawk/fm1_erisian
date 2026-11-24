@@ -8,7 +8,7 @@
 #include <string.h>
 
 #include "../erisian.h"
-#include "draw.h"
+#include "ui/draw.h"
 #include "fm1.h"
 
 enum { BTN_OCT_DOWN, BTN_OCT_UP, BTN_FX, BTN_SEL, BTN_ENV, BTN_LFO, BTN_EDIT,
