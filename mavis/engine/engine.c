@@ -437,7 +437,8 @@ FM1_AUDIO_CODE static void mallet_start(struct mavis_engine *e, struct mv_voice 
     for (unsigned i = 0; i < MV_MAX_VOICES; i++)
         if (e->voice[i].active && &e->voice[i] != v) sounding++;
     /* budget / sounding, by reciprocal (no division in the interrupt) */
-    static const uint16_t recip[MV_MAX_VOICES + 1] = { 0, 65535, 32768, 21845, 16384, 13107, 10923, 9362, 8192 };
+    static uint16_t recip[MV_MAX_VOICES + 1] FM1_AUDIO_DATA =   /* RAM: no flash reads here */
+        { 0, 65535, 32768, 21845, 16384, 13107, 10923, 9362, 8192 };
     if (sounding > MV_MAX_VOICES) sounding = MV_MAX_VOICES;
     uint32_t per = (e->res_budget * recip[sounding]) >> 16;
     unsigned uni = m->unison_q16 ? 2u : 1u;
