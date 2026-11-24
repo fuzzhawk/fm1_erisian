@@ -39,8 +39,11 @@ Decisions below were made with Charles on 2026-11-24.
 - **Adaptive quality.** Voices share a fixed CPU budget: with few notes each
   voice runs at full detail; as more notes sound, detail steps down
   gracefully (fewer pad partials, fewer mallet modes, sympathetic strings
-  and sawari thinned). A global QUALITY setting and the measured overrun
-  count tune the steps. Maximum voices: 8 (the real number is set on hardware).
+  and sawari thinned). Built for MALLET (M2): a resonator budget (16..192,
+  start 96) steered every block by the CPU load measured with the tick
+  counter (shrinks above 55 %, grows below 35 %); each new note gets
+  budget / sounding voices; above 80 % sounding voices drop their top modes.
+  Maximum voices: 8 (the real number is set on hardware).
 - **Reverb**: one warm room-to-hall stereo reverb (size, damping, pre-delay,
   per-patch send).
 
@@ -83,6 +86,17 @@ or hammer contact pulse.
   partials, a shared soundboard body.
 - Frequency-dependent decay (high modes die faster), damper behaviour on
   release, HOLD as a sustain pedal.
+
+Built (M2, 2026-11-24): 12 modes per note (doubled with UNISON for the
+piano end's second string, which also gives the two-stage decay through
+SUSTAIN); MATERIAL interpolates the mode sets kalimba → glockenspiel →
+xylophone → vibraphone → marimba → string (STRETCH sets the string's
+inharmonicity); per-material fundamental decay (vibes ring ~9× longer than
+xylophone at the same DECAY); HARD/FORCE set the contact time, POS the
+strike point, NOISE the knock; TUBE resonator, BOARD (shared soundboard),
+TREM/T.RAT (one motor for all bars), RELS damper (127 = no damper). Modes
+above ~13.8 kHz are skipped. Resonator feedback truncates toward zero so
+tails decay to true silence (rounding left limit cycles).
 
 ## 5. PAD — additive harmonics
 
@@ -141,7 +155,7 @@ inspiration; no Mutable code is used):
 | Control | Function |
 |---|---|
 | KNOB1–4 | The four parameters on screen |
-| PRESETS | Browse patches (factory + user) |
+| PRESETS | Browse patches (factory + user); until M5: switch engine |
 | SELECT | Morph towards the target patch |
 | ALGORITHM | Page within the edit mode |
 | EDIT | Next edit mode |

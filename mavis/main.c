@@ -22,9 +22,19 @@
 
 #define SOUND_KEY 0x41u
 #define SOUND_MAGIC 0x3153564Du /* "MVS1" */
-#define SOUND_VERSION 1u
+#define SOUND_VERSION 2u   /* 2: every engine's sound */
 
 struct sound_file {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t bytes;
+    uint8_t engine;
+    struct mv_patch bank[MV_ENGINES];
+    struct mv_global global;
+};
+
+/* Version 1: one KOTO sound. */
+struct sound_file_v1 {
     uint32_t magic;
     uint16_t version;
     uint16_t bytes;
@@ -53,16 +63,25 @@ static void sound_apply(void)
 
 static void sound_load(void)
 {
-    static struct sound_file f;
+    static union { struct sound_file v2; struct sound_file_v1 v1; } f;
     size_t got;
-    mv_patch_default(&patch, MV_KOTO);
+    for (unsigned e = 0; e < MV_ENGINES; e++) mv_patch_default(&bank[e], e);
     mv_global_default(&global);
+    unsigned current = MV_KOTO;
     if (store_state == 0 && store_read(&store, SOUND_KEY, &f, sizeof f, &got) == STORE_OK &&
-        f.magic == SOUND_MAGIC && f.version == SOUND_VERSION && got == sizeof f &&
-        f.bytes == sizeof f) {
-        patch = f.patch;
-        global = f.global;
+        f.v2.magic == SOUND_MAGIC) {
+        if (f.v2.version == SOUND_VERSION && got == sizeof f.v2 && f.v2.bytes == sizeof f.v2) {
+            for (unsigned e = 0; e < MV_ENGINES; e++)
+                if (f.v2.bank[e].engine == e) bank[e] = f.v2.bank[e];
+            global = f.v2.global;
+            current = f.v2.engine < MV_ENGINES ? f.v2.engine : MV_KOTO;
+        } else if (f.v1.version == 1 && got == sizeof f.v1 && f.v1.bytes == sizeof f.v1) {
+            bank[MV_KOTO] = f.v1.patch;
+            bank[MV_KOTO].engine = MV_KOTO;
+            global = f.v1.global;
+        }
     }
+    patch = bank[current];
 }
 
 static int sound_write(void)
@@ -71,7 +90,9 @@ static int sound_write(void)
     f.magic = SOUND_MAGIC;
     f.version = SOUND_VERSION;
     f.bytes = (uint16_t)sizeof f;
-    f.patch = patch;
+    bank[patch.engine < MV_ENGINES ? patch.engine : 0] = patch;
+    f.engine = patch.engine;
+    for (unsigned e = 0; e < MV_ENGINES; e++) f.bank[e] = bank[e];
     f.global = global;
     save_pending = 0;
     int r = store_write(&store, SOUND_KEY, &f, sizeof f);
@@ -93,7 +114,7 @@ int sound_save(void)
 
 static uint32_t probe_heap(void)
 {
-    uint32_t lo = 0, hi = 320;       /* KB; more than the heap */
+    uint32_t lo = 0, hi = 1024;      /* KB; well above the heap (320 was the ceiling) */
     while (lo < hi) {
         uint32_t mid = (lo + hi + 1) / 2;
         void *p = malloc(mid * 1024u);
@@ -168,7 +189,8 @@ void groove_screen_init(void)
     fmt_str(fmt_str(t, "V "), FW_VERSION);
     draw_line(8, 120, t, 1, COLOR_DIM, COLOR_BG);
     mv_init(&engine);
-    mv_patch_default(&patch, MV_KOTO);
+    for (unsigned e = 0; e < MV_ENGINES; e++) mv_patch_default(&bank[e], e);
+    patch = bank[MV_KOTO];
     mv_global_default(&global);
     sound_apply();
     audio_init();

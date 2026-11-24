@@ -14,6 +14,7 @@ static int failures;
 
 struct mavis_engine engine;
 struct mv_patch patch;
+struct mv_patch bank[MV_ENGINES];
 struct mv_global global;
 
 static unsigned notes[64][2], nnotes;
@@ -73,6 +74,7 @@ static void screenshot(const char *name)
 int main(void)
 {
     mv_init(&engine);
+    for (unsigned e = 0; e < MV_ENGINES; e++) mv_patch_default(&bank[e], e);
     mv_patch_default(&patch, MV_KOTO);
     mv_global_default(&global);
     mv_prepare(&engine, &patch, &global);
@@ -136,6 +138,32 @@ int main(void)
 
     press(9);                                  /* SAVE */
     CHECK(saves == 1);
+
+    /* PRESETS: to MALLET; KOTO's edits are kept in the bank. */
+    press(6);                                  /* EDIT: back to PLAY */
+    unsigned koto_bright = patch.p[KT_BRIGHT];
+    turn(6, 1);
+    CHECK(patch.engine == MV_MALLET && engine.engine == MV_MALLET);
+    mv_note(&engine, 57, 100);
+    for (unsigned i = 0; i < 10; i++) { memset(out, 0, sizeof out); mv_render(&engine, out, 128); }
+    millis += 100;
+    ui_visual(millis);
+    lit = 0;
+    for (unsigned y = 46; y < 142; y++) for (unsigned x = 0; x < 240; x++) lit += fb[y][x] == RGB565(255, 176, 40);
+    CHECK(lit > 300);                          /* mode bars */
+    screenshot("mavis_mallet_play");
+    press(6);                                  /* SOUND: MATERIAL page */
+    unsigned mat = patch.p[MA_MATERIAL];
+    turn(2, -1);
+    CHECK(patch.p[MA_MATERIAL] == mat - 1);
+    turn(1, 1);                                /* MALLET page: KNOB1 = HARD */
+    unsigned hard = patch.p[MA_HARD];
+    turn(2, 1);
+    CHECK(patch.p[MA_HARD] == hard + 1);
+    screenshot("mavis_mallet_sound");
+    turn(6, -1);                               /* back to KOTO */
+    CHECK(patch.engine == MV_KOTO && patch.p[KT_BRIGHT] == koto_bright);
+    CHECK(bank[MV_MALLET].p[MA_HARD] == hard + 1);
 
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     printf("mavis ui ok\n");

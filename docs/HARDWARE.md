@@ -124,3 +124,16 @@ Verified on Charles's unit (0x856014).
   (KNOB1–4 in a row above the buttons; SELECT, ALGORITHM, PRESETS grouped
   with master volume). F.TYP looked unreachable: choice parameters needed
   ~32 detents per choice. Fixed in the next build (pages of 4 on KNOB1–4).
+
+## MAVIS
+
+### 2026-11-24 — MAVIS M0 + M1, KOTO (CI run 39, sha256 567de639…) — BOOTS AND PLAYS
+Verified on Charles's unit (0x856014).
+- Boots, plays the koto from the keys.
+- CPU (status page): **4 % average, 27 % peak**; overruns 1 (cause not
+  known yet: boot, a save or a background erase are candidates).
+- RAM: probe reports 320K, which is the probe's ceiling, so at least
+  320 KB can be allocated (more than the 221.7 KB the link map suggests).
+- Conclusion: the waveguide string is cheap; the peak is the note-on work
+  (clearing a 2048-sample delay line per fresh voice), not the steady
+  render. Lots of headroom for heavier mallet and pad models.

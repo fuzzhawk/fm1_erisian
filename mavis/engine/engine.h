@@ -14,8 +14,10 @@
 #define MV_MAX_VOICES 8u
 #define MV_KS_LEN 2048u                /* string delay line: >= 21.6 Hz */
 #define MV_PARAMS 32u
+#define MV_MODES 12u                   /* MALLET: modes per note */
+#define MV_RES (2u * MV_MODES)         /* ... doubled by unison strings */
 
-enum mv_engine { MV_KOTO, MV_ENGINES };
+enum mv_engine { MV_KOTO, MV_MALLET, MV_ENGINES };
 
 /* KOTO parameters (0..127). */
 enum {
@@ -26,6 +28,17 @@ enum {
     KT_ATO, KT_ATODELAY, KT_YURI, KT_YURIRATE,       /* MOTION: ato-oshi, yuri */
     KT_HUMAN, KT_WIDTH, KT_LEVEL,                    /* OUTPUT */
     KT_COUNT
+};
+
+/* MALLET parameters (0..127). MATERIAL runs kalimba -> glockenspiel ->
+ * xylophone -> vibraphone -> marimba -> piano string. */
+enum {
+    MA_MATERIAL, MA_TONE, MA_DECAY, MA_DAMP,         /* MATERIAL */
+    MA_HARD, MA_POS, MA_FORCE, MA_NOISE,             /* MALLET */
+    MA_TUBE, MA_BODY, MA_TREM, MA_TRATE,             /* RESONATE */
+    MA_UNISON, MA_SUSTAIN, MA_STRETCH, MA_RELEASE,   /* STRINGS (piano end) */
+    MA_HUMAN, MA_WIDTH, MA_LEVEL,                    /* OUTPUT */
+    MA_COUNT
 };
 
 /* Tuning and keyboard (global, not per patch). */
@@ -42,6 +55,27 @@ struct mv_patch {
 struct mv_global {
     uint8_t tuning, scale, map, root;   /* root: 0 = C */
     uint8_t voices;                     /* 1..MV_MAX_VOICES */
+};
+
+/* Fixed-point form of a MALLET patch (control task writes). */
+struct mallet_derived {
+    uint8_t modes;               /* modes in use (<= MV_MODES) */
+    uint32_t ratio_q16[MV_MODES];
+    int32_t amp[MV_MODES];       /* Q15: material x tone x strike position */
+    uint32_t atten_q32[MV_MODES];/* log2 attenuation per sample at the mode */
+    uint32_t damp_k;             /* frequency damping: x (1 + inc * k / 2^32) */
+    uint32_t unison_q16;         /* detune of the second string, 0 = none */
+    uint32_t sustain_q16;        /* second string decays this much slower (<= 1) */
+    uint32_t mallet_inc;         /* half-sine contact pulse */
+    int32_t mallet_gain;         /* excitation scale for the pulse length, Q15 */
+    int32_t force;               /* Q15 */
+    int32_t noise;               /* impact click, Q15 */
+    int32_t tube;                /* tube resonator mix, Q15 */
+    int32_t trem_depth;          /* Q15 */
+    uint32_t trem_inc;           /* per sample */
+    uint32_t release_q30;        /* damper: amplitude factor per sample, Q30; 0 = ring */
+    int32_t human_cents_q16, human_gain, width, level;
+    int32_t body_b1[3], body_b2[3], body_g[3], body_mix;   /* soundboard */
 };
 
 /* Fixed-point form of a KOTO patch (control task writes). */
@@ -74,6 +108,7 @@ struct koto_derived {
 
 struct mv_voice {
     uint8_t active, gate, note, pending;
+    uint8_t engine;          /* the engine that started it */
     uint8_t pending_note;
     uint32_t age;            /* allocation order */
     uint32_t blocks;         /* since note on */
@@ -95,15 +130,31 @@ struct mv_voice {
     uint32_t noise;
     int32_t tension_env;     /* Q16 */
     int32_t peak;
+    /* mallet */
+    uint8_t nres;            /* resonators in use */
+    int32_t rb1[MV_RES], rb2[MV_RES], rg[MV_RES], ry1[MV_RES], ry2[MV_RES];
+    int32_t tb1, tb2, tg, ty1, ty2;      /* tube */
+    uint32_t mallet_phase;
+    uint8_t mallet_on;
+    uint16_t click;          /* impact noise frames left */
+    uint32_t rel_env;        /* damper envelope, Q30 */
 };
 
 struct mavis_engine {
     struct mv_global global;
     struct koto_derived koto;
+    struct mallet_derived mallet;
+    uint8_t engine;          /* the patch's engine */
+    uint32_t trem_phase;     /* vibraphone motor: one for all bars */
+    /* Adaptive detail: resonators to share between sounding voices, steered
+     * by the measured CPU load (audio.c sets load_q16 every block). */
+    uint32_t res_budget;
+    uint32_t load_q16;
     int32_t tuning_q16[12];  /* per pitch class from the root, semitones Q16 */
     struct mv_voice voice[MV_MAX_VOICES];
     int16_t line[MV_MAX_VOICES][MV_KS_LEN];
     int32_t body_y1[3], body_y2[3];
+    int32_t board_y1[3], board_y2[3];
     uint8_t pressing;        /* oshide held (all sounding notes) */
     uint32_t clock;
     uint32_t random;

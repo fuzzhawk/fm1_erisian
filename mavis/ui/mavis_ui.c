@@ -16,7 +16,7 @@ enum { BTN_OCT_DOWN, BTN_OCT_UP, BTN_FX, BTN_SEL, BTN_ENV, BTN_LFO, BTN_EDIT,
 enum { ENC_SELECT, ENC_ALGORITHM, ENC_K1, ENC_K2, ENC_K3, ENC_K4, ENC_PRESETS };
 
 #define KEYS 27u
-#define ACCENT RGB565(255, 92, 56)         /* KOTO: vermilion */
+#define ACCENT 0                            /* per engine, see accents[] */
 #define C_GRID RGB565(40, 22, 18)
 
 #define COL_W 60u
@@ -44,24 +44,49 @@ enum { PK_NONE, PK_P, PK_TUNING, PK_SCALE, PK_MAP, PK_ROOT, PK_VOICES };
 struct slot { uint8_t kind, param; const char *name; };
 #define PAGES 9u
 #define PAGE_QUICK 8u
-static const struct slot pages[PAGES][4] = {
-    { { PK_P, KT_DECAY, 0 }, { PK_P, KT_BRIGHT, 0 }, { PK_P, KT_STIFF, 0 }, { PK_P, KT_DAMP, 0 } },
-    { { PK_P, KT_POS, 0 }, { PK_P, KT_NAIL, 0 }, { PK_P, KT_STRENGTH, 0 }, { PK_P, KT_NOISE, 0 } },
-    { { PK_P, KT_BODY, 0 }, { PK_P, KT_SIZE, 0 }, { PK_P, KT_SAWARI, 0 }, { PK_P, KT_TENSION, 0 } },
-    { { PK_P, KT_OSHIDE, 0 }, { PK_P, KT_PRESS, 0 }, { PK_P, KT_BENDIN, 0 }, { PK_P, KT_BENDTIME, 0 } },
-    { { PK_P, KT_ATO, 0 }, { PK_P, KT_ATODELAY, 0 }, { PK_P, KT_YURI, 0 }, { PK_P, KT_YURIRATE, 0 } },
-    { { PK_P, KT_HUMAN, 0 }, { PK_P, KT_WIDTH, 0 }, { PK_P, KT_LEVEL, 0 }, { PK_NONE, 0, 0 } },
-    { { PK_TUNING, 0, "TUNE" }, { PK_SCALE, 0, "SCALE" }, { PK_MAP, 0, "MAP" }, { PK_ROOT, 0, "ROOT" } },
-    { { PK_VOICES, 0, "VOICE" }, { PK_NONE, 0, 0 }, { PK_NONE, 0, 0 }, { PK_NONE, 0, 0 } },
-    { { PK_P, KT_DECAY, 0 }, { PK_P, KT_BRIGHT, 0 }, { PK_P, KT_POS, 0 }, { PK_P, KT_NAIL, 0 } },
+#define KEYS_PAGE 6u
+#define KEYS_PAGES \
+    { { PK_TUNING, 0, "TUNE" }, { PK_SCALE, 0, "SCALE" }, { PK_MAP, 0, "MAP" }, { PK_ROOT, 0, "ROOT" } }, \
+    { { PK_VOICES, 0, "VOICE" }, { PK_NONE, 0, 0 }, { PK_NONE, 0, 0 }, { PK_NONE, 0, 0 } }
+/* Per engine: sound pages 0..5, then the shared KEYS pages, then QUICK. */
+static const struct slot pages[MV_ENGINES][PAGES][4] = {
+    [MV_KOTO] = {
+        { { PK_P, KT_DECAY, 0 }, { PK_P, KT_BRIGHT, 0 }, { PK_P, KT_STIFF, 0 }, { PK_P, KT_DAMP, 0 } },
+        { { PK_P, KT_POS, 0 }, { PK_P, KT_NAIL, 0 }, { PK_P, KT_STRENGTH, 0 }, { PK_P, KT_NOISE, 0 } },
+        { { PK_P, KT_BODY, 0 }, { PK_P, KT_SIZE, 0 }, { PK_P, KT_SAWARI, 0 }, { PK_P, KT_TENSION, 0 } },
+        { { PK_P, KT_OSHIDE, 0 }, { PK_P, KT_PRESS, 0 }, { PK_P, KT_BENDIN, 0 }, { PK_P, KT_BENDTIME, 0 } },
+        { { PK_P, KT_ATO, 0 }, { PK_P, KT_ATODELAY, 0 }, { PK_P, KT_YURI, 0 }, { PK_P, KT_YURIRATE, 0 } },
+        { { PK_P, KT_HUMAN, 0 }, { PK_P, KT_WIDTH, 0 }, { PK_P, KT_LEVEL, 0 }, { PK_NONE, 0, 0 } },
+        KEYS_PAGES,
+        { { PK_P, KT_DECAY, 0 }, { PK_P, KT_BRIGHT, 0 }, { PK_P, KT_POS, 0 }, { PK_P, KT_NAIL, 0 } },
+    },
+    [MV_MALLET] = {
+        { { PK_P, MA_MATERIAL, 0 }, { PK_P, MA_TONE, 0 }, { PK_P, MA_DECAY, 0 }, { PK_P, MA_DAMP, 0 } },
+        { { PK_P, MA_HARD, 0 }, { PK_P, MA_POS, 0 }, { PK_P, MA_FORCE, 0 }, { PK_P, MA_NOISE, 0 } },
+        { { PK_P, MA_TUBE, 0 }, { PK_P, MA_BODY, 0 }, { PK_P, MA_TREM, 0 }, { PK_P, MA_TRATE, 0 } },
+        { { PK_P, MA_UNISON, 0 }, { PK_P, MA_SUSTAIN, 0 }, { PK_P, MA_STRETCH, 0 }, { PK_P, MA_RELEASE, 0 } },
+        { { PK_P, MA_HUMAN, 0 }, { PK_P, MA_WIDTH, 0 }, { PK_P, MA_LEVEL, 0 }, { PK_NONE, 0, 0 } },
+        { { PK_NONE, 0, 0 } },
+        KEYS_PAGES,
+        { { PK_P, MA_MATERIAL, 0 }, { PK_P, MA_HARD, 0 }, { PK_P, MA_DECAY, 0 }, { PK_P, MA_TUBE, 0 } },
+    },
 };
-static const char *const page_names[PAGES] = {
-    "STRING", "PLUCK", "BODY", "PRESS", "MOTION", "OUTPUT", "TUNING", "VOICES", "QUICK",
+static const char *const page_names[MV_ENGINES][PAGES] = {
+    [MV_KOTO] = { "STRING", "PLUCK", "BODY", "PRESS", "MOTION", "OUTPUT", "TUNING", "VOICES", "QUICK" },
+    [MV_MALLET] = { "MATERIAL", "MALLET", "RESONATE", "STRINGS", "OUTPUT", "", "TUNING", "VOICES", "QUICK" },
 };
+static const uint8_t sound_pages[MV_ENGINES] = { 6, 5 };
+static const uint16_t accents[MV_ENGINES] = { RGB565(255, 92, 56), RGB565(255, 176, 40) };
+#define ENGINE (patch.engine < MV_ENGINES ? patch.engine : 0u)
+#define PAGE(pg) pages[ENGINE][pg]
+#undef ACCENT
+#define ACCENT (accents[ENGINE])
 enum { MODE_PLAY, MODE_SOUND, MODE_KEYS, MODES };
 static const struct { const char *name; uint8_t first, count; } modes[MODES] = {
-    { "PLAY", PAGE_QUICK, 1 }, { "SOUND", 0, 6 }, { "KEYS", 6, 2 },
+    { "PLAY", PAGE_QUICK, 1 }, { "SOUND", 0, 6 }, { "KEYS", KEYS_PAGE, 2 },
 };
+static unsigned mode_count(unsigned m) { return m == MODE_SOUND ? sound_pages[ENGINE] : modes[m].count; }
+
 static const char *const note_names[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -110,13 +135,13 @@ static void slot_edit(const struct slot *s, int delta)
 
 static unsigned visible_index(unsigned *count)
 {
-    *count = modes[mode].count;
+    *count = mode_count(mode);
     return param_page - modes[mode].first;
 }
 
 static void page_step(int dir)
 {
-    const unsigned first = modes[mode].first, n = modes[mode].count;
+    const unsigned first = modes[mode].first, n = mode_count(mode);
     param_page = first + (param_page - first + (dir > 0 ? 1u : n - 1u)) % n;
 }
 
@@ -152,7 +177,7 @@ static void draw_tabs(void)
 static void draw_columns(unsigned name_y, unsigned value_y, int bars)
 {
     for (unsigned k = 0; k < 4; k++) {
-        const struct slot *s = &pages[param_page][k];
+        const struct slot *s = &PAGE(param_page)[k];
         char value[12];
         unsigned bar, max;
         slot_value(s, value, &bar, &max);
@@ -165,7 +190,7 @@ static void draw_columns(unsigned name_y, unsigned value_y, int bars)
 static void draw_edit(void)
 {
     char t[24], *p;
-    draw_line(2, TITLE_Y, page_names[param_page], 2, ACCENT, COLOR_BG);
+    draw_line(2, TITLE_Y, page_names[ENGINE][param_page], 2, ACCENT, COLOR_BG);
     unsigned count, at = visible_index(&count);
     if (count > 1) {
         p = fmt_uint(t, at + 1);
@@ -182,8 +207,8 @@ static void draw_play(void)
 {
     draw_columns(QUICK_Y, QUICK_Y + 18, 0);
     draw_line(2, 196, "LFO HELD: PRESS (OSHIDE)", 1, COLOR_DIM, COLOR_BG);
-    draw_line(2, 208, "EDIT: SOUND   SAVE: KEEP SOUND", 1, COLOR_DIM, COLOR_BG);
-    draw_line(2, 220, "HOME: CPU AND STATUS", 1, COLOR_DIM, COLOR_BG);
+    draw_line(2, 208, "EDIT: SOUND   PRESETS: ENGINE", 1, COLOR_DIM, COLOR_BG);
+    draw_line(2, 220, "SAVE: KEEP   HOME: CPU, STATUS", 1, COLOR_DIM, COLOR_BG);
 }
 
 static void draw_body(void)
@@ -219,6 +244,33 @@ void ui_visual(uint32_t now)
 
     const unsigned vi = engine.last_voice < MV_MAX_VOICES ? engine.last_voice : 0;
     const struct mv_voice *v = &engine.voice[vi];
+    if (ENGINE == MV_MALLET) {
+        /* The bar's modes as bars: height ~ log2 of each mode's amplitude. */
+        static uint8_t h[MV_RES];
+        unsigned n = v->active ? v->nres : 0;
+        if (n > MV_RES) n = MV_RES;
+        for (unsigned i = 0; i < n; i++) {
+            int32_t a = v->ry1[i] < 0 ? -v->ry1[i] : v->ry1[i];
+            unsigned bits = 0;
+            while (a) { bits++; a >>= 1; }
+            int hh = ((int)bits - 6) * (int)VIS_H / 18;
+            h[i] = (uint8_t)(hh < 0 ? 0 : hh > (int)VIS_H ? (int)VIS_H : hh);
+        }
+        unsigned bw = n ? 240u / n : 240u;
+        for (unsigned b = 0; b < VIS_H; b += 16) {
+            unsigned rows = VIS_H - b < 16 ? VIS_H - b : 16;
+            for (unsigned r = 0; r < rows; r++) {
+                unsigned y = b + r;
+                for (unsigned x = 0; x < 240; x++) {
+                    unsigned i = x / bw;
+                    int on = i < n && x % bw < bw - 2 && y >= VIS_H - h[i];
+                    band[r * 240 + x] = on ? ACCENT : y == VIS_H - 1 ? C_GRID : COLOR_BG;
+                }
+            }
+            fm1_screen_blit(0, VIS_Y + b, 240, rows, band, 240u * rows);
+        }
+        return;
+    }
     const int16_t *line = engine.line[vi];
     const uint32_t w = v->w, period = v->pint ? v->pint : 1;
     int32_t peak = 1500;
@@ -255,6 +307,21 @@ void ui_init(void)
     mode = MODE_PLAY;
     param_page = PAGE_QUICK;
     memset(key_note, 0xFF, sizeof key_note);
+}
+
+/* PRESETS: next engine (patch browsing comes with the library). Each engine
+ * keeps its own settings in the bank. */
+static void switch_engine(int dir)
+{
+    unsigned e = (ENGINE + MV_ENGINES + (dir > 0 ? 1u : MV_ENGINES - 1u)) % MV_ENGINES;
+    if (e == ENGINE) return;
+    audio_all_off();
+    bank[ENGINE] = patch;
+    patch = bank[e];
+    patch.engine = (uint8_t)e;
+    mv_prepare(&engine, &patch, &global);
+    if (mode == MODE_SOUND && param_page >= sound_pages[e]) param_page = 0;
+    ui_redraw();
 }
 
 static void set_mode(unsigned m)
@@ -305,8 +372,9 @@ int ui_poll(uint32_t now)
         if (!d) continue;
         if (d > 1 || d < -1) d *= 2;                 /* fast turns go further */
         if (e == ENC_ALGORITHM) { if (mode != MODE_PLAY) page_step(d); }
-        else if (e >= ENC_K1 && e <= ENC_K4) slot_edit(&pages[param_page][e - ENC_K1], d);
-        else continue;                               /* SELECT, PRESETS: morph, patches (later) */
+        else if (e >= ENC_K1 && e <= ENC_K4) slot_edit(&PAGE(param_page)[e - ENC_K1], d);
+        else if (e == ENC_PRESETS) { switch_engine(d); continue; }
+        else continue;                               /* SELECT: morph (later) */
         dirty = 1;
     }
     if (now - last_body >= 500u) dirty = 1;          /* CPU / voices in the header */

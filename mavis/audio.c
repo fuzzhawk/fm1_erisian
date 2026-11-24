@@ -11,6 +11,7 @@
 
 struct mavis_engine engine;
 struct mv_patch patch;
+struct mv_patch bank[MV_ENGINES];
 struct mv_global global;
 
 #define NOTE_QUEUE 32u
@@ -83,6 +84,7 @@ FM1_AUDIO_CODE int fm1_app_render(int32_t *out, unsigned frames)
     for (unsigned k = 0; note_tail != note_head && k < 16; k++, note_tail++)
         mv_note(&engine, note_key[note_tail % NOTE_QUEUE], note_velocity[note_tail % NOTE_QUEUE]);
 
+    engine.load_q16 = load_q16;          /* steers the adaptive detail */
     mv_render(&engine, out, frames);
 
     const int32_t gain = master_gain;

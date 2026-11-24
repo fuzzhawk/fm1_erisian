@@ -15,7 +15,8 @@
 #endif
 
 extern struct mavis_engine engine;
-extern struct mv_patch patch;
+extern struct mv_patch patch;          /* the sound playing now */
+extern struct mv_patch bank[MV_ENGINES]; /* each engine's sound (PRESETS switches) */
 extern struct mv_global global;
 
 /* --- audio.c ------------------------------------------------------------- */
